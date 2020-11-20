@@ -1,0 +1,2 @@
+recursive-include python/fibermeas/etc *
+recursive-include cextern/**/*
