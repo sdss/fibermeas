@@ -1,9 +1,4 @@
 ---
 
-option1:
-    suboption1: 1
-    suboption2: "some text"
-    suboption3:
-        subsuboption1: [1, 2, 3]
-
-option2: 2.0
+outputDirectory: "~/fibermeas"
+useCores: 12

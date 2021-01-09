@@ -6,10 +6,17 @@ fibermeas Reference
 
 .. _api-main:
 
-Main
-----
+Constants
+-----------
 
-.. automodule:: fibermeas.main
+.. automodule:: fibermeas.constants
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Plot Utilities
+-----------------
+.. automodule:: fibermeas.plotutils
    :members:
    :undoc-members:
    :show-inheritance:
