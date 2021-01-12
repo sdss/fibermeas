@@ -1,12 +1,15 @@
 import os
 import time
 from multiprocessing import Pool
+import shutil
+import json
 
 import numpy
 from scipy import signal
 import matplotlib.pyplot as plt
 import pandas as pd
 from skimage.filters import sobel
+from skimage.measure import regionprops, label
 import fitsio
 
 from fibermeas import config
@@ -14,9 +17,11 @@ from fibermeas import config
 from .constants import imgScale, ferrule2Top, betaArmWidth
 from .constants import templateFilePath, versionDir
 from .template import rotVary, betaArmWidthVary, upsample
-from .plotutils import imshow
+from .plotutils import imshow, plotGridEval, plotSolnsOnImage
 
+t1 = time.time()
 templates = numpy.load(templateFilePath)
+print("loading templates took %.1f seconds"%(time.time()-t1))
 
 
 def correlateWithTemplate(image, template):
@@ -54,8 +59,8 @@ def doOne(x):
 
     Parameters
     ------------
-    x : list
-        index for rotation, index for beta arm width, image to correlate
+    x : list of [int, int, numpy.ndarray]
+        [index for rotation, index for beta arm width, image to correlate]
 
     Returns
     ----------
@@ -77,7 +82,8 @@ def doOne(x):
     tempImg = templates[iRot,jBaw,:,:]
     maxResponse, [argRow, argCol] = correlateWithTemplate(refImg, tempImg)
 
-    return rotVary[iRot], betaArmWidthVary[jBaw], maxResponse, argRow
+    return rotVary[iRot], betaArmWidthVary[jBaw], maxResponse, argRow, argCol
+
 
 def identifyFibers(imgData):
     """Measure the properties of backlit fibers in an image using
@@ -90,17 +96,18 @@ def identifyFibers(imgData):
 
     Returns
     ---------
-    regions : list skimage.RegionProperties
-        Only things that look like they could be back lit fibers are returned.
+    fiberDict : dict
+        nested dictionary keyed by fiber [metrology, apogee, boss], containing
+        measurements of fiber location, circularity, and diameter
     """
 
     # https://scikit-image.org/docs/dev/api/skimage.measure.html#skimage.measure.regionprops
     # might be useful to try?
     # https://stackoverflow.com/questions/31705355/how-to-detect-circlular-region-in-images-and-centre-it-with-python
 
-    thresh = (data > numpy.percentile(data, 95))
+    thresh = (imgData > numpy.percentile(imgData, 95))
     labels = label(thresh)
-    props = regionprops(labels, data)
+    props = regionprops(labels, imgData)
 
     regions = []
     for ii, region in enumerate(props):
@@ -109,43 +116,80 @@ def identifyFibers(imgData):
             # filter out unlikely regions by looking for circular
             # things of a certain size
             continue
-        # cr, cc = region.weighted_centroid
         # plotCircle(cc+0.5, cr+0.5, ed/2)
         # plt.text(cc,cr,"%i"%ii)
         # print("%i"%ii, cr, cc, region.equivalent_diameter, region.bbox_area, region.eccentricity, region.perimeter)
         regions.append(region)
 
-    return regions
+    if len(regions) != 3:
+        raise RuntimeError("Found > 3 Fibers!!!")
+
+    # sort regions by row (metrology fiber should be lowest column)
+    regions.sort(key=lambda region: region.weighted_centroid[0])
+
+    # pop off the metrology fiber
+    metRegion = regions.pop(0)
+
+    # sort remaining regions by column (to identify apogee vs boss fiber)
+    # boss is righ of apogee when looking from top of beta arm
+    regions.sort(key=lambda region: region.weighted_centroid[1])
+    apRegion = regions[0]
+    bossRegion = regions[1]
+    fiberNames = ["metrology", "apogee", "boss"]
+    regions = [metRegion, apRegion, bossRegion]
+
+    fiberDict = {}
+    for fiberName, region in zip(fiberNames, regions):
+        cr, cc = region.weighted_centroid
+        fiberDict[fiberName] = {
+            "centroidRow": cr,
+            "centroidCol": cc,
+            "eccentricity": region.eccentricity,
+            "equivalentDiameter": region.equivalent_diameter
+        }
+
+    return fiberDict
 
 
-def solveImage(imageFile):
+def processImage(imageFile):
     """Measure the locations of fibers in the beta arm reference frame.
-    Measurement data and figures are put in a new directory:
+    Raw measurement data are put in a new directory:
     config["outputDirectory"]/imageFile/
+
+    The two files written are fiberMeas.json and templateGridEval.csv
 
     Parameters:
     ------------
     imageFile : str
         path to FITS file to analyze
     """
-    imgName = imageFile.split("/")[-1].strip(".fits")
-    imgName = imgName.strip(".FITS")
+    imgBaseName = os.path.basename(imageFile)
+    imgName = imgBaseName.strip(".fits").strip(".FITS")
 
     measDir = os.path.join(
         versionDir,
         imgName
     )
+
     if os.path.exists(measDir):
         print("%s has already been processessed, skipping"%imageFile)
         return
+    else:
+        os.mkdir(measDir)
+
+    # copy image to the meas directory
+    shutil.copy(imageFile, os.path.join(measDir, imgBaseName))
 
     data = fitsio.read(imageFile)
     # normalize data
     data = data / numpy.max(data)
     # first identify fiber locations in the image
-    fiberRegions = identifyFibers(data)
+    fiberMeas = identifyFibers(data)
 
-    # write fiber regions
+    # write fiber regions as a json file
+    fiberMeasFile = os.path.join(measDir, "fiberMeas.json")
+    with open(fiberMeasFile, "w") as f:
+        json.dump(fiberMeas, f, indent=4)
 
     # correlate with beta arm templates to find origin of
     # beta arm coordinate system in the image frame
@@ -157,13 +201,67 @@ def solveImage(imageFile):
     pool = Pool(config["useCores"])
     t1 = time.time()
     out = numpy.array(pool.map(doOne, indList))
-    print("took %2.f mins"%((t1-time.time())/60.))
+    print("took %2.f mins"%((time.time()-t1)/60.))
     pool.close()
 
     maxCorr = pd.DataFrame(out, columns=["rot", "betaArmWidth", "maxCorr", "argRow", "argCol"])
     # write this as an output
-    outFile = os.path.join(versionDir, "templateGridEval.csv")
+    outFile = os.path.join(measDir, "templateGridEval.csv")
     maxCorr.to_csv(outFile)
+
+
+def solveImage(imageFile):
+    """Use the files output by processImage to determine the fiber coordinates
+    in the beta arm coordinate system
+
+
+    Parameters:
+    ------------
+    imageFile : str
+        path to FITS file to analyze
+    """
+    imgBaseName = os.path.basename(imageFile)
+    imgName = imgBaseName.strip(".fits").strip(".FITS")
+
+    measDir = os.path.join(
+        versionDir,
+        imgName
+    )
+
+    # load the csv with template grid evaluations
+    path2tempEval = os.path.join(measDir, "templateGridEval.csv")
+    tempEval = pd.read_csv(path2tempEval, index_col=0)
+    figname = os.path.join(measDir, "templateGridEval.png")
+    plotGridEval(tempEval, figname)
+
+    # find max response
+    amax = tempEval["maxCorr"].idxmax() # where is the correlation maximized?
+    argMaxSol = tempEval.iloc[amax]
+    betaArmWidth = argMaxSol["betaArmWidth"]
+    rot = argMaxSol["rot"]
+    ferruleCenRow = argMaxSol["argRow"]
+    ferruleCenCol = argMaxSol["argCol"]
+
+    # overplot solutions on original image
+    fiberMeasFile = os.path.join(measDir, "fiberMeas.json")
+    with open(fiberMeasFile, "r") as f:
+        fiberMeasDict = json.load(f)
+
+    imgData = fitsio.read(imageFile)
+
+    filename = "junk"
+
+    plotSolnsOnImage(
+        imgData, rot, betaArmWidth, ferruleCenRow,ferruleCenCol,
+        fiberMeasDict, filename)
+
+    plotSolnsOnImage(
+        imgData, rot+.15, betaArmWidth, ferruleCenRow,ferruleCenCol,
+        fiberMeasDict, filename)
+
+    plt.show()
+
+    # plt.show()
 
     # find the best correlated template
 
@@ -221,96 +319,97 @@ def findMaxResponse(df, dbawDist, rotDist):
 
 
 if __name__ == "__main__":
+    pass
 
 
-    # generateOuterTemplates()
+###################################
+
+    # # generateOuterTemplates()
+
+    # # refImg25sor = rotate(sobel(data), 2.5)
+
+    # # refImgsor = sobel(data)
+    # refImg = sobel(data)
+    # # fitsio.write("refImg.fits", refImg) # angle measured in ds9 90.15, 89.5, 359.9,
+
+    # # fits measured
+    # a = numpy.mean([90-90.15, 90-89.5, 90-(359.9-360+90)])
+    # print("a", a)
+
+    # refImg25 = rotate(refImg, 2.5)
+    # # fitsio.write("refImg25.fits", refImg25) # 87.688336, 87.288246, 357.56788
+    # a2 = numpy.mean([90-87.688336, 90-87.288246, 90-(357.56788-360+90)])
+    # print("a2", a2)
+
+
+    # # def genDataFrame():
+    # #     indList = []
+    # #     for ii, imgRot in enumerate(rotVary):
+    # #         for jj, dBAW in enumerate(betaArmWidthVary):
+    # #             indList.append([ii,jj,refImg25])
+
+    # #     pool = Pool(config["useCores"])
+    # #     t1 = time.time()
+    # #     out = numpy.array(pool.map(doOne, indList))
+    # #     print("took %2.f mins"%((t1-time.time())/60.))
+    # #     pool.close()
+    # #     maxCorr = pd.DataFrame(out, columns=["imgRot", "dBetaWidth", "maxCorr", "argRow", "argCol", "meanRow", "meanCol", "varRow", "varCol"])
+    # #     maxCorr.to_csv("maxCorr25.csv")
 
 
 
-    # refImg25sor = rotate(sobel(data), 2.5)
+    # # genDataFrame()
 
-    # refImgsor = sobel(data)
-    refImg = sobel(data)
-    # fitsio.write("refImg.fits", refImg) # angle measured in ds9 90.15, 89.5, 359.9,
+    # # import pdb; pdb.set_trace()
 
-    # fits measured
-    a = numpy.mean([90-90.15, 90-89.5, 90-(359.9-360+90)])
-    print("a", a)
+    # # import pdb; pdb.set_trace()
 
-    refImg25 = rotate(refImg, 2.5)
-    # fitsio.write("refImg25.fits", refImg25) # 87.688336, 87.288246, 357.56788
-    a2 = numpy.mean([90-87.688336, 90-87.288246, 90-(357.56788-360+90)])
-    print("a2", a2)
+    # # genDataFrame()
 
+    # # maxCorr is unrotated image
+    # # maxCorr25.csv is rotated by 2.5 degrees
 
-    # def genDataFrame():
-    #     indList = []
-    #     for ii, imgRot in enumerate(rotVary):
-    #         for jj, dBAW in enumerate(betaArmWidthVary):
-    #             indList.append([ii,jj,refImg25])
+    # maxCorr = pd.read_csv("maxCorr.csv", index_col=0)
 
-    #     pool = Pool(config["useCores"])
-    #     t1 = time.time()
-    #     out = numpy.array(pool.map(doOne, indList))
-    #     print("took %2.f mins"%((t1-time.time())/60.))
-    #     pool.close()
-    #     maxCorr = pd.DataFrame(out, columns=["imgRot", "dBetaWidth", "maxCorr", "argRow", "argCol", "meanRow", "meanCol", "varRow", "varCol"])
-    #     maxCorr.to_csv("maxCorr25.csv")
+    # plotMarginals(maxCorr)
+
+    # plt.show()
 
 
 
-    # genDataFrame()
+    # maxCorr25 = pd.read_csv("maxCorr25.csv", index_col=0)
+
+    # plotMarginals(maxCorr25)
+
+    # plt.show()
+
+    # dbwDist = 0.02
+    # rotDist = 0.5
+
+    # sol, avgSol, maxCorrCut = findMaxResponse(maxCorr, dbwDist, rotDist)
+
+    # plotMarginals(maxCorrCut)
+
+    # plt.show()
+
+    # sol25, avgSol25, maxCorrCut25 = findMaxResponse(maxCorr25, dbwDist, rotDist)
+
+    # plotMarginals(maxCorrCut)
+    # plt.show()
+
+
+    # # amax = maxCorr["maxCorr"].idxmax()
+    # # sol = maxCorr.iloc[amax]
+
+    # # amax = maxCorr25["maxCorr"].idxmax()
+    # # sol25 = maxCorr25.iloc[amax]
+
+    # # import pdb; pdb.set_trace()
+
+    # plotResults([sol, avgSol], refImg)
+
+    # plotResults([sol25, avgSol25], refImg25)
 
     # import pdb; pdb.set_trace()
-
-    # import pdb; pdb.set_trace()
-
-    # genDataFrame()
-
-    # maxCorr is unrotated image
-    # maxCorr25.csv is rotated by 2.5 degrees
-
-    maxCorr = pd.read_csv("maxCorr.csv", index_col=0)
-
-    plotMarginals(maxCorr)
-
-    plt.show()
-
-
-
-    maxCorr25 = pd.read_csv("maxCorr25.csv", index_col=0)
-
-    plotMarginals(maxCorr25)
-
-    plt.show()
-
-    dbwDist = 0.02
-    rotDist = 0.5
-
-    sol, avgSol, maxCorrCut = findMaxResponse(maxCorr, dbwDist, rotDist)
-
-    plotMarginals(maxCorrCut)
-
-    plt.show()
-
-    sol25, avgSol25, maxCorrCut25 = findMaxResponse(maxCorr25, dbwDist, rotDist)
-
-    plotMarginals(maxCorrCut)
-    plt.show()
-
-
-    # amax = maxCorr["maxCorr"].idxmax()
-    # sol = maxCorr.iloc[amax]
-
-    # amax = maxCorr25["maxCorr"].idxmax()
-    # sol25 = maxCorr25.iloc[amax]
-
-    # import pdb; pdb.set_trace()
-
-    plotResults([sol, avgSol], refImg)
-
-    plotResults([sol25, avgSol25], refImg25)
-
-    import pdb; pdb.set_trace()
 
 

@@ -19,6 +19,8 @@ from . import __version__ as vers
 # # apogee xy position in solid model
 # apXY = [14.965, 0.376]
 
+MICRONS_PER_MM = 1000
+
 # distance from center of metrology fiber to end of beta arm
 met2top = 1.886  # mm
 
@@ -52,4 +54,3 @@ baseDir = os.path.expanduser(config["outputDirectory"])
 versionDir = os.path.join(baseDir, "v" + vers)
 templateDir = os.path.join(versionDir, "templateGrid")
 templateFilePath = os.path.join(templateDir, "templates.npy")
-

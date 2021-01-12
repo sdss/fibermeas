@@ -36,22 +36,23 @@ if __name__ == "__main__":
     imgRots = [-4, 0, 4]
     for imgRot in imgRots:
         plt.figure()
-        temp = template.betaArmTemplate(imgRot=imgRot)
+        temp = template.betaArmTemplate(imgRot=imgRot, betaArmWidth=3.2)
         plt.title("imgRot=%i"%imgRot)
         imshow(temp)
+        print("sum: ", numpy.sum(temp))
 
-    betaWidths = [2.5, 3, 3.5]
-    for betaWidth in betaWidths:
-        plt.figure()
-        temp = template.betaArmTemplate(betaArmWidth=betaWidth)
-        plt.title("betaWidth=%.2f"%betaWidth)
-        imshow(temp)
+    # betaWidths = [2.5, 3, 3.5]
+    # for betaWidth in betaWidths:
+    #     plt.figure()
+    #     temp = template.betaArmTemplate(betaArmWidth=betaWidth)
+    #     plt.title("betaWidth=%.2f"%betaWidth)
+    #     imshow(temp)
 
-    blurMags = [1,3,9]
-    for blurMag in blurMags:
-        plt.figure()
-        temp = template.betaArmTemplate(blurMag=blurMag)
-        plt.title("blurMag=%i"%blurMag)
-        imshow(temp)
+    # blurMags = [1,3,9]
+    # for blurMag in blurMags:
+    #     plt.figure()
+    #     temp = template.betaArmTemplate(blurMag=blurMag)
+    #     plt.title("blurMag=%i"%blurMag)
+    #     imshow(temp)
 
     plt.show()

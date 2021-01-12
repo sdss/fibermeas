@@ -8,24 +8,24 @@ import os
 
 from fibermeas import config
 
-from .constants import met2top, imgScale, betaArmWidth
+from .constants import met2top, imgScale, betaArmWidth, MICRONS_PER_MM
 from .constants import baseDir, versionDir, templateDir, templateFilePath
 from .constants import ferrule2Top, betaArmRadius
 
-from . import __version__ as vers
 
 # print("version", __version__)
 # print("config", config)
 
-MICRONS_PER_MM = 1000
+# MICRONS_PER_MM = 1000
 
 # varied parameters for creating template grids
-rotVary = numpy.linspace(-4, 4, 4)  # degrees
-betaArmWidthVary = numpy.linspace(-0.1, .1, 4) + betaArmWidth  # mm
+# rotVary = numpy.linspace(-4, 4, 91)  # degrees
+rotVary = numpy.linspace(-0.1, 0.3, 91)  # degrees
+betaArmWidthVary = numpy.linspace(-.005, .03, 41) + betaArmWidth  # mm
 upsample = 1
 blurMag = 1
 
-# templateFilePath = os.path.join(templateDir, "templates.npy")
+# templates = numpy.load(templateFilePath)
 
 
 def betaArmTemplate(
@@ -44,7 +44,7 @@ def betaArmTemplate(
     Parameters
     -----------
     imgRot : float
-        clockwise angle (deg) of beta arm, negative is CCW.
+        clockwise angle (deg) of beta arm, a negative value is CCW.
     betaArmWidth : float
         width of beta arm in mm
     upsample : int
@@ -65,7 +65,7 @@ def betaArmTemplate(
         raise RuntimeError("upsample parameter must be odd!")
 
     # pick a size for this template (big enough to get the whole beta arm in)
-    size = int(2 * met2top * MICRONS_PER_MM / imgScale)
+    size = int(2.1 * met2top * MICRONS_PER_MM / imgScale)
 
     if size % 2 == 0:
         size += 1  # make it odd so a pixel is centered
@@ -127,13 +127,24 @@ def betaArmTemplate(
     # give it a bit of a blur by scale so it's approx blurMag pixels after downsampling
     temp = gaussian(temp, upsample * blurMag)
     temp = sobel(temp)
+    # blank out the lower rows so that after rotating
+    # the edge will be the same permiter length (no cropping out of the frame)
+    temp[:50,:] = 0
+
+    # add extra buffer around edge to not chop the signal
 
     # rotate whole image
     if imgRot != 0:
         temp = rotate(temp, imgRot)
+    else:
+        temp = rotate(temp, 90)
+        temp = temp.T
+        # temp = temp[::-1, :]
+        # temp = rotate(temp, -1)
 
     # scale back down to expected image size
-    temp = rescale(temp, 1 / upsample, anti_aliasing=True)
+    if upsample != 1:
+        temp = rescale(temp, 1 / upsample, anti_aliasing=True)
     return temp
 
 
@@ -153,6 +164,7 @@ def multiTemplate(x):
         2D image template for a beta arm
     """
     i, j = x
+    print("generating", i, j)
     return betaArmTemplate(
         imgRot=rotVary[i],
         betaArmWidth=betaArmWidthVary[j],
@@ -188,6 +200,8 @@ def generateOuterTemplates():
 
     ijs = []
     for ii, imgRot in enumerate(rotVary):
+        # if imgRot != 0:
+        #     continue
         for jj, dBAW in enumerate(betaArmWidthVary):
             ijs.append([ii,jj])
 
