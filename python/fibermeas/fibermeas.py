@@ -3,6 +3,7 @@ import time
 from multiprocessing import Pool
 import shutil
 import json
+import itertools
 
 import numpy
 from scipy import signal
@@ -15,7 +16,7 @@ import fitsio
 from fibermeas import config
 
 from .constants import imgScale, ferrule2Top, betaArmWidth
-from .constants import templateFilePath, versionDir
+from .constants import templateFilePath, versionDir, vers
 from .template import rotVary, betaArmWidthVary, upsample
 from .plotutils import imshow, plotGridEval, plotSolnsOnImage
 
@@ -64,25 +65,41 @@ def doOne(x):
 
     Returns
     ----------
-    rot : float
-        rotation of template
-    betaArmWidth : float
-        beta arm width of template
-    maxResponse : float
-        the maximum respose seen in the correlation
-    row : int
-        row in image where max response seen
-    col : in
-        column in image where max response seen
+    outputList : list
+        2 element list, containing response for + and - rotation.
+        Each list element contains 5 elements:
+            rot : float
+                rotation of template
+            betaArmWidth : float
+                beta arm width of template
+            maxResponse : float
+                the maximum respose seen in the correlation
+            row : int
+                row in image where max response seen
+            col : int
+                column in image where max response seen
     """
     iRot = x[0]
     jBaw = x[1]
     refImg = x[2]
 
+    outputList = []
+
+    rot = rotVary[iRot]
+    betaArmWidth = betaArmWidthVary[jBaw]
+
     tempImg = templates[iRot,jBaw,:,:]
     maxResponse, [argRow, argCol] = correlateWithTemplate(refImg, tempImg)
 
-    return rotVary[iRot], betaArmWidthVary[jBaw], maxResponse, argRow, argCol
+    outputList.append([rot, betaArmWidth, maxResponse, argRow, argCol])
+
+    # now correlate negative rotation (flip image about y axis)
+    tempImg = tempImg[:,::-1]
+    maxResponse, [argRow, argCol] = correlateWithTemplate(refImg, tempImg)
+
+    outputList.append([-1*rot, betaArmWidth, maxResponse, argRow, argCol])
+
+    return outputList
 
 
 def identifyFibers(imgData):
@@ -187,7 +204,7 @@ def processImage(imageFile):
     fiberMeas = identifyFibers(data)
 
     # write fiber regions as a json file
-    fiberMeasFile = os.path.join(measDir, "fiberMeas.json")
+    fiberMeasFile = os.path.join(measDir, "centroidMeas_%s_%s.json"%(imgName, vers))
     with open(fiberMeasFile, "w") as f:
         json.dump(fiberMeas, f, indent=4)
 
@@ -204,9 +221,12 @@ def processImage(imageFile):
     print("took %2.f mins"%((time.time()-t1)/60.))
     pool.close()
 
+    # flatten the output list to pack into a table
+    out = list(itertools.chain(*out))
+
     maxCorr = pd.DataFrame(out, columns=["rot", "betaArmWidth", "maxCorr", "argRow", "argCol"])
     # write this as an output
-    outFile = os.path.join(measDir, "templateGridEval.csv")
+    outFile = os.path.join(measDir, "templateGridEval_%s_%s.csv"%(imgName, vers))
     maxCorr.to_csv(outFile)
 
 
@@ -229,37 +249,38 @@ def solveImage(imageFile):
     )
 
     # load the csv with template grid evaluations
-    path2tempEval = os.path.join(measDir, "templateGridEval.csv")
+    path2tempEval = os.path.join(measDir, "templateGridEval_%s_%s.csv"%(imgName, vers))
     tempEval = pd.read_csv(path2tempEval, index_col=0)
-    figname = os.path.join(measDir, "templateGridEval.png")
+    figname = os.path.join(measDir, "templateGridEval_%s_%s.png"%(imgName, vers))
     plotGridEval(tempEval, figname)
 
     # find max response
     amax = tempEval["maxCorr"].idxmax() # where is the correlation maximized?
     argMaxSol = tempEval.iloc[amax]
     betaArmWidth = argMaxSol["betaArmWidth"]
+    print("betaArmWidth", betaArmWidth)
     rot = argMaxSol["rot"]
     ferruleCenRow = argMaxSol["argRow"]
     ferruleCenCol = argMaxSol["argCol"]
 
     # overplot solutions on original image
-    fiberMeasFile = os.path.join(measDir, "fiberMeas.json")
+    fiberMeasFile = os.path.join(measDir, "centroidMeas_%s_%s.json"%(imgName, vers))
     with open(fiberMeasFile, "r") as f:
         fiberMeasDict = json.load(f)
 
     imgData = fitsio.read(imageFile)
 
-    filename = "junk"
 
     plotSolnsOnImage(
-        imgData, rot, betaArmWidth, ferruleCenRow,ferruleCenCol,
-        fiberMeasDict, filename)
+        imgData, rot, betaArmWidth, ferruleCenRow, ferruleCenCol,
+        fiberMeasDict, measDir, imgName
+    )
 
-    plotSolnsOnImage(
-        imgData, rot+.15, betaArmWidth, ferruleCenRow,ferruleCenCol,
-        fiberMeasDict, filename)
+    # plotSolnsOnImage(
+    #     imgData, rot+.15, betaArmWidth, ferruleCenRow,ferruleCenCol,
+    #     fiberMeasDict, filename)
 
-    plt.show()
+    # plt.show()
 
     # plt.show()
 

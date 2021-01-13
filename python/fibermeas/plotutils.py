@@ -1,9 +1,11 @@
 import numpy
 import matplotlib.pyplot as plt
 import seaborn as sns
+import os
 
 from .constants import imgScale, ferrule2Top, betaArmWidth, MICRONS_PER_MM
-from .constants import fiber2ferrule
+from .constants import fiber2ferrule, vers
+
 
 def imshow(imgData):
     """Show an image
@@ -60,7 +62,8 @@ def plotGridEval(df, filename):
 
 def plotSolnsOnImage(
     imgData, rot, betaArmWidth, ferruleCenRow,
-    ferruleCenCol, fiberMeasDict, filename
+    ferruleCenCol, fiberMeasDict, measDir,
+    imageName
 ):
     """
     Visualize results plotted over the original image.  Save to filename
@@ -79,8 +82,10 @@ def plotSolnsOnImage(
         column in imgData corresponding to max response of correlation
     fiberMeasDict : dict
         dictionary containing measurements of fiber positions
-    filename : str
-        path to save file
+    measDir : str
+        directory in which to save results
+    imageName : str
+        name of image corresponding to imgData (stripped of .fits)
     """
     plt.figure(figsize=(10,7))
     imshow(imgData)
@@ -162,6 +167,17 @@ def plotSolnsOnImage(
         y = fiberMeas["centroidRow"]
         plt.plot(x,y, "x", markersize=4, color="red")
         plotCircle(x,y,r, linestyle=":")
+
+
+    # save full figure
+    fullFigName = os.path.join(measDir, "fullSoln_%s_%s.png"%(imageName, vers))
+    zoomFigName = os.path.join(measDir, "zoomSoln_%s_%s.png"%(imageName, vers))
+    plt.savefig(fullFigName, dpi=350)
+
+    plt.xlim([ferruleCenCol-200, ferruleCenCol+200])
+    plt.ylim([ferruleCenRow-200, ferruleCenRow+134])
+    plt.savefig(zoomFigName, dpi=350)
+    plt.close()
 
     # plt.plot([rightLine_plusy[0], rightLine_minusy[0]], [rightLine_plusy[1], rightLine_minusy[1]], '--', color="white", linewidth=0.5)
     # plt.plot([leftLine_plusy[0], leftLine_minusy[0]], [leftLine_plusy[1], leftLine_minusy[1]], '--', color="white", linewidth=0.5)

@@ -20,7 +20,10 @@ from .constants import ferrule2Top, betaArmRadius
 
 # varied parameters for creating template grids
 # rotVary = numpy.linspace(-4, 4, 91)  # degrees
-rotVary = numpy.linspace(-0.1, 0.3, 91)  # degrees
+# only need positive rotations, negatives
+# are found by inverting the x axis (which is faster) than
+# creating a + and - rot template separately
+rotVary = numpy.linspace(0, 0.3, 47)  # degrees
 betaArmWidthVary = numpy.linspace(-.005, .03, 41) + betaArmWidth  # mm
 upsample = 1
 blurMag = 1
@@ -133,14 +136,14 @@ def betaArmTemplate(
 
     # add extra buffer around edge to not chop the signal
 
-    # rotate whole image
-    if imgRot != 0:
-        temp = rotate(temp, imgRot)
-    else:
-        temp = rotate(temp, 90)
-        temp = temp.T
-        # temp = temp[::-1, :]
-        # temp = rotate(temp, -1)
+    # rotate whole image to 45 then back to desired imgRot
+    # this is important for handling 0 rotation
+    # every image gets rotated twice which
+    # evens out the blurring and makes it so that
+    # a zero rotation image gives a similar response
+    # to that of rotated images
+    temp = rotate(temp, 45)
+    temp = rotate(temp, imgRot-45)
 
     # scale back down to expected image size
     if upsample != 1:
