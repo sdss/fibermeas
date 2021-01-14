@@ -1,0 +1,20 @@
+{
+    "metrology": {
+        "centroidRow": 338.844940916781,
+        "centroidCol": 955.8365193719142,
+        "eccentricity": 0.19008043993119642,
+        "equivalentDiameter": 53.78475848823986
+    },
+    "apogee": {
+        "centroidRow": 579.3115146351496,
+        "centroidCol": 825.986312268755,
+        "eccentricity": 0.24796170323238212,
+        "equivalentDiameter": 50.323686813251655
+    },
+    "boss": {
+        "centroidRow": 578.4045191810917,
+        "centroidCol": 1095.3810440506927,
+        "eccentricity": 0.2042274847428929,
+        "equivalentDiameter": 55.12914649514206
+    }
+}

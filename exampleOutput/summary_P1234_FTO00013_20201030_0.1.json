@@ -1,0 +1,66 @@
+{
+    "ccdRot": 0.14966666666666664,
+    "betaArmWidthMM": 3.008125,
+    "ferruleCenCCD": [
+        957.0,
+        493.0
+    ],
+    "imgFile": "P1234_FTO00013_20201030.fits",
+    "imgName": "P1234_FTO00013_20201030",
+    "imgScale": 2.78,
+    "version": "0.1",
+    "maxCorr": 209.17696172343133,
+    "measDate": "2021-01-14T10:08:57.701228",
+    "metrologyCenCCD": [
+        955.8365193719142,
+        338.844940916781
+    ],
+    "bossCenCCD": [
+        1095.3810440506927,
+        578.4045191810917
+    ],
+    "apogeeCenCCD": [
+        825.986312268755,
+        579.3115146351496
+    ],
+    "metrologyDiaCCD": 53.78475848823986,
+    "bossDiaCCD": 55.12914649514206,
+    "apogeeDiaCCD": 50.323686813251655,
+    "metrologyEccentricity": 0.19008043993119642,
+    "bossEccentricity": 0.2042274847428929,
+    "apogeeEccentricity": 0.24796170323238212,
+    "metrologyXYmm": [
+        14.319032000998897,
+        0.0021150155304186548
+    ],
+    "bossXYmm": [
+        14.98601870664239,
+        -0.38407779590290725
+    ],
+    "apogeeXYmm": [
+        14.9865838436027,
+        0.3648435898040922
+    ],
+    "metrologyErrUm": [
+        -5.032000998896891,
+        -2.115015530418655
+    ],
+    "bossErrUm": [
+        -21.018706642390583,
+        8.077795902907248
+    ],
+    "apogeeErrUm": [
+        -21.58384360270027,
+        11.156410195907796
+    ],
+    "metrologyErrMagUm": 5.458417787858622,
+    "bossErrMagUm": 22.51747800194105,
+    "apogeeErrMagUm": 24.29666218074369,
+    "tempEvalFigName": "/Users/csayres/fibermeas/v0.1/P1234_FTO00013_20201030/templateGridEval_P1234_FTO00013_20201030_0.1.png",
+    "fullFigName": "/Users/csayres/fibermeas/v0.1/P1234_FTO00013_20201030/fullSoln_P1234_FTO00013_20201030_0.1.png",
+    "zoomFigName": "/Users/csayres/fibermeas/v0.1/P1234_FTO00013_20201030/zoomSoln_P1234_FTO00013_20201030_0.1.png",
+    "robotID": "N/A",
+    "expTime": "N/A",
+    "expDate": "N/A",
+    "roboTailID": "N/A"
+}
