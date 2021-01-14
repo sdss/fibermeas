@@ -110,7 +110,7 @@ def doOne(x):
     jBaw = x[1]
     refImg = x[2]
 
-    outputList = []
+    # outputList = []
 
     rot = rotVary[iRot]
     betaArmWidth = betaArmWidthVary[jBaw]
@@ -118,15 +118,15 @@ def doOne(x):
     tempImg = templates[iRot,jBaw,:,:]
     maxResponse, [argRow, argCol] = correlateWithTemplate(refImg, tempImg)
 
-    outputList.append([rot, betaArmWidth, maxResponse, argRow, argCol])
+    # outputList.append([rot, betaArmWidth, maxResponse, argRow, argCol])
 
     # now correlate negative rotation (flip image about y axis)
-    if rot != 0:
-        tempImg = tempImg[:,::-1]
-        maxResponse, [argRow, argCol] = correlateWithTemplate(refImg, tempImg)
-        outputList.append([-1*rot, betaArmWidth, maxResponse, argRow, argCol])
+    # if rot != 0:
+    #     tempImg = tempImg[:,::-1]
+    #     maxResponse, [argRow, argCol] = correlateWithTemplate(refImg, tempImg)
+    #     outputList.append([-1*rot, betaArmWidth, maxResponse, argRow, argCol])
 
-    return outputList
+    return rot, betaArmWidth, maxResponse, argRow, argCol
 
 
 def identifyFibers(imgData):
@@ -249,7 +249,7 @@ def processImage(imageFile):
     pool.close()
 
     # flatten the output list to pack into a table
-    out = list(itertools.chain(*out))
+    # out = list(itertools.chain(*out))
 
     maxCorr = pd.DataFrame(out, columns=["rot", "betaArmWidth", "maxCorr", "argRow", "argCol"])
     # write this as an output

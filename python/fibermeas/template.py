@@ -23,7 +23,7 @@ from .constants import ferrule2Top, betaArmRadius
 # only need positive rotations, negatives
 # are found by inverting the x axis (which is faster) than
 # creating a + and - rot template separately
-rotVary = numpy.linspace(0, 0.3, 47)  # degrees
+rotVary = numpy.linspace(-.3, 0.3, 91)  # degrees
 betaArmWidthVary = numpy.linspace(-.005, .03, 41) + betaArmWidth  # mm
 upsample = 1
 blurMag = 1
@@ -142,8 +142,8 @@ def betaArmTemplate(
     # evens out the blurring and makes it so that
     # a zero rotation image gives a similar response
     # to that of rotated images
-    temp = rotate(temp, 45)
-    temp = rotate(temp, imgRot-45)
+    temp = rotate(temp, -45)
+    temp = rotate(temp, 45+imgRot)
 
     # scale back down to expected image size
     if upsample != 1:
