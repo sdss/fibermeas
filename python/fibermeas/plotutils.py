@@ -86,6 +86,13 @@ def plotSolnsOnImage(
         directory in which to save results
     imageName : str
         name of image corresponding to imgData (stripped of .fits)
+
+    Returns
+    --------
+    fullFigName : str
+        path to full figure
+    zoomFigName : str
+        path to fiber-zoomed figure
     """
     plt.figure(figsize=(10,7))
     imshow(imgData)
@@ -178,6 +185,8 @@ def plotSolnsOnImage(
     plt.ylim([ferruleCenRow-200, ferruleCenRow+134])
     plt.savefig(zoomFigName, dpi=350)
     plt.close()
+
+    return fullFigName, zoomFigName
 
     # plt.plot([rightLine_plusy[0], rightLine_minusy[0]], [rightLine_plusy[1], rightLine_minusy[1]], '--', color="white", linewidth=0.5)
     # plt.plot([leftLine_plusy[0], leftLine_minusy[0]], [leftLine_plusy[1], leftLine_minusy[1]], '--', color="white", linewidth=0.5)

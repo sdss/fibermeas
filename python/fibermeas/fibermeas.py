@@ -4,6 +4,7 @@ from multiprocessing import Pool
 import shutil
 import json
 import itertools
+import datetime
 
 import numpy
 from scipy import signal
@@ -12,17 +13,43 @@ import pandas as pd
 from skimage.filters import sobel
 from skimage.measure import regionprops, label
 import fitsio
+from jinja2 import Environment, PackageLoader, select_autoescape
 
 from fibermeas import config
 
-from .constants import imgScale, ferrule2Top, betaArmWidth
-from .constants import templateFilePath, versionDir, vers
+from .constants import imgScale, ferrule2Top, MICRONS_PER_MM
+from .constants import betaAxis2ferrule, templateFilePath, versionDir, vers
+from .constants import modelMetXY, modelBossXY, modelApXY
 from .template import rotVary, betaArmWidthVary, upsample
 from .plotutils import imshow, plotGridEval, plotSolnsOnImage
 
 t1 = time.time()
 templates = numpy.load(templateFilePath)
 print("loading templates took %.1f seconds"%(time.time()-t1))
+
+
+def computeAngles(centMeas):
+    met = numpy.array([centMeas["metrology"]["centroidCol"], centMeas["metrology"]["centroidRow"]])
+    ap = numpy.array([centMeas["apogee"]["centroidCol"], centMeas["apogee"]["centroidRow"]])
+    bo = numpy.array([centMeas["boss"]["centroidCol"], centMeas["boss"]["centroidRow"]])
+
+    dir1 = (bo - met)/numpy.linalg.norm(bo-met)
+    dir2 = (ap - met)/numpy.linalg.norm(ap-met)
+
+    ang = numpy.degrees(numpy.arccos(dir1.dot(dir2)))
+    print("ang1", ang)
+
+    dir1 = (met - bo)/numpy.linalg.norm(met-bo)
+    dir2 = (ap - bo)/numpy.linalg.norm(ap-bo)
+
+    ang = numpy.degrees(numpy.arccos(dir1.dot(dir2)))
+    print("ang2", ang)
+
+    dir1 = (met -ap)/numpy.linalg.norm(met-ap)
+    dir2 = (bo -ap)/numpy.linalg.norm(bo-ap)
+
+    ang = numpy.degrees(numpy.arccos(dir1.dot(dir2)))
+    print("ang3", ang)
 
 
 def correlateWithTemplate(image, template):
@@ -66,8 +93,8 @@ def doOne(x):
     Returns
     ----------
     outputList : list
-        2 element list, containing response for + and - rotation.
-        Each list element contains 5 elements:
+        1 or 2 element list, containing response for + and - rotation.
+        Each list element contains 5 items:
             rot : float
                 rotation of template
             betaArmWidth : float
@@ -94,10 +121,10 @@ def doOne(x):
     outputList.append([rot, betaArmWidth, maxResponse, argRow, argCol])
 
     # now correlate negative rotation (flip image about y axis)
-    tempImg = tempImg[:,::-1]
-    maxResponse, [argRow, argCol] = correlateWithTemplate(refImg, tempImg)
-
-    outputList.append([-1*rot, betaArmWidth, maxResponse, argRow, argCol])
+    if rot != 0:
+        tempImg = tempImg[:,::-1]
+        maxResponse, [argRow, argCol] = correlateWithTemplate(refImg, tempImg)
+        outputList.append([-1*rot, betaArmWidth, maxResponse, argRow, argCol])
 
     return outputList
 
@@ -148,7 +175,7 @@ def identifyFibers(imgData):
     metRegion = regions.pop(0)
 
     # sort remaining regions by column (to identify apogee vs boss fiber)
-    # boss is righ of apogee when looking from top of beta arm
+    # boss is right of apogee when looking from top of beta arm
     regions.sort(key=lambda region: region.weighted_centroid[1])
     apRegion = regions[0]
     bossRegion = regions[1]
@@ -232,8 +259,11 @@ def processImage(imageFile):
 
 def solveImage(imageFile):
     """Use the files output by processImage to determine the fiber coordinates
-    in the beta arm coordinate system
+    in the beta arm coordinate system.  Various output files are written to:
+    config["outputDirectory"]/imageFile/
 
+    note: processImage must be run first!!! this routine expects outputs
+    from that one.
 
     Parameters:
     ------------
@@ -251,30 +281,186 @@ def solveImage(imageFile):
     # load the csv with template grid evaluations
     path2tempEval = os.path.join(measDir, "templateGridEval_%s_%s.csv"%(imgName, vers))
     tempEval = pd.read_csv(path2tempEval, index_col=0)
-    figname = os.path.join(measDir, "templateGridEval_%s_%s.png"%(imgName, vers))
-    plotGridEval(tempEval, figname)
+    tempEvalFigName = os.path.join(measDir, "templateGridEval_%s_%s.png"%(imgName, vers))
+    plotGridEval(tempEval, tempEvalFigName)
 
     # find max response
     amax = tempEval["maxCorr"].idxmax() # where is the correlation maximized?
     argMaxSol = tempEval.iloc[amax]
     betaArmWidth = argMaxSol["betaArmWidth"]
-    print("betaArmWidth", betaArmWidth)
     rot = argMaxSol["rot"]
     ferruleCenRow = argMaxSol["argRow"]
     ferruleCenCol = argMaxSol["argCol"]
+    maxCorr = argMaxSol["maxCorr"]
 
     # overplot solutions on original image
     fiberMeasFile = os.path.join(measDir, "centroidMeas_%s_%s.json"%(imgName, vers))
     with open(fiberMeasFile, "r") as f:
         fiberMeasDict = json.load(f)
 
+    # computeAngles(fiberMeasDict)
+
     imgData = fitsio.read(imageFile)
 
-
-    plotSolnsOnImage(
+    fullFigName, zoomFigName = plotSolnsOnImage(
         imgData, rot, betaArmWidth, ferruleCenRow, ferruleCenCol,
         fiberMeasDict, measDir, imgName
     )
+
+    # put centroid info in beta arm frame (mm)
+    # unrotate (to put beta arm +x along image +y),
+    # remember beta arm +x points from beta axis toward fibers,
+    # along centerline of beta arm
+    imgRot = numpy.radians(-1*rot)
+    rotMat = numpy.array([
+        [numpy.cos(imgRot), numpy.sin(imgRot)],
+        [-numpy.sin(imgRot), numpy.cos(imgRot)]
+    ])
+
+    # center of rotation is the "nominal location" of the ferrule's center
+    centRot = numpy.array([ferruleCenCol, ferruleCenRow])
+    ccdMetXY = [
+        fiberMeasDict["metrology"]["centroidCol"],
+        fiberMeasDict["metrology"]["centroidRow"]
+    ]
+
+    ccdApogeeXY = [
+        fiberMeasDict["apogee"]["centroidCol"],
+        fiberMeasDict["apogee"]["centroidRow"]
+    ]
+
+    ccdBossXY = [
+        fiberMeasDict["boss"]["centroidCol"],
+        fiberMeasDict["boss"]["centroidRow"]
+    ]
+
+    metXY = numpy.array(ccdMetXY) - centRot
+    apXY = numpy.array(ccdApogeeXY) - centRot
+    boXY = numpy.array(ccdBossXY) - centRot
+
+    # print("raw xys")
+    # print(metXY)
+    # print(apXY)
+    # print(boXY)
+
+    # unrotate
+    metXY = rotMat.dot(metXY)
+    apXY = rotMat.dot(apXY)
+    boXY = rotMat.dot(boXY)
+
+    # print("rot xys")
+    # print(metXY)
+    # print(apXY)
+    # print(boXY)
+
+    # convert from pixels to mm
+    _metXY = metXY*imgScale/MICRONS_PER_MM
+    _apXY = apXY*imgScale/MICRONS_PER_MM
+    _boXY = boXY*imgScale/MICRONS_PER_MM
+
+    # in image beta arm +x is roughly image +y
+    # rotate 90 degrees CW, beta frame puts +x from beta axis toward fibers
+    # this could probably be handled earlier with the original rotation?
+    # here just carefully exchange x and y's to make the 90 deg rotation
+    metXY[0] = _metXY[1]
+    metXY[1] = _metXY[0] * -1
+
+    apXY[0] = _apXY[1]
+    apXY[1] = _apXY[0] * -1
+
+    boXY[0] = _boXY[1]
+    boXY[1] = _boXY[0] * -1
+
+    # translate origin from ferrule center to beta axis
+    metXY[0] += betaAxis2ferrule
+    apXY[0] += betaAxis2ferrule
+    boXY[0] += betaAxis2ferrule
+
+    # compute errors
+    # vector points from measured location to expected
+    # location in beta arm frame, units are microns
+    metErr = (modelMetXY - metXY)*MICRONS_PER_MM
+    apErr = (modelApXY - apXY)*MICRONS_PER_MM
+    boErr = (modelBossXY - boXY)*MICRONS_PER_MM
+    # print("metErr", metErr, numpy.linalg.norm(metErr))
+    # print("apErr", apErr, numpy.linalg.norm(apErr))
+    # print("boErr", boErr, numpy.linalg.norm(boErr))
+
+    # compile results
+    solns = {}
+    solns["ccdRot"] = rot  # angle (deg) from beta arm +x to ccd +y (CCW)
+    solns["betaArmWidthMM"] = betaArmWidth  # best fit beta arm width (mm)
+    # CCD col for expected center of ferrule
+    # correlation returns the best pixel (not fractional!)
+    # but error cannot be larger than 0.5 pixels or ~1 micron so
+    # whatever
+    solns["ferruleCenCCD"] = [ferruleCenCol, ferruleCenRow]
+    solns["imgFile"] = imageFile
+    solns["imgName"] = imgName
+    solns["imgScale"] = imgScale  # microns per pixel
+    solns["version"] = vers  # software version
+    solns["maxCorr"] = maxCorr  # correlation strength
+    solns["measDate"] = datetime.datetime.now().isoformat()
+
+    # centroids of pixels in original image
+    solns["metrologyCenCCD"] = ccdMetXY
+    solns["bossCenCCD"] = ccdBossXY
+    solns["apogeeCenCCD"] = ccdApogeeXY
+
+    # rough diameter in pixels in original image
+    solns["metrologyDiaCCD"] = fiberMeasDict["metrology"]["equivalentDiameter"]
+    solns["bossDiaCCD"] = fiberMeasDict["boss"]["equivalentDiameter"]
+    solns["apogeeDiaCCD"] = fiberMeasDict["apogee"]["equivalentDiameter"]
+
+    # rough eccentricity in pixels in original image
+    solns["metrologyEccentricity"] = fiberMeasDict["metrology"]["eccentricity"]
+    solns["bossEccentricity"] = fiberMeasDict["boss"]["eccentricity"]
+    solns["apogeeEccentricity"] = fiberMeasDict["apogee"]["eccentricity"]
+
+    # measurements in beta arm frame (mm)
+    solns["metrologyXYmm"] = list(metXY)
+    solns["bossXYmm"] = list(boXY)
+    solns["apogeeXYmm"] = list(apXY)
+
+    # errors in microns
+    # vector points from measured location to expected
+    # location in beta arm frame, units are microns
+    solns["metrologyErrUm"] = list(metErr)
+    solns["bossErrUm"] = list(boErr)
+    solns["apogeeErrUm"] = list(apErr)
+
+    solns["metrologyErrMagUm"] = numpy.linalg.norm(metErr)
+    solns["bossErrMagUm"] = numpy.linalg.norm(boErr)
+    solns["apogeeErrMagUm"] = numpy.linalg.norm(apErr)
+
+    # paths to plots
+    solns["tempEvalFigName"] = tempEvalFigName
+    solns["fullFigName"] = fullFigName
+    solns["zoomFigName"] = zoomFigName
+
+    # tbt
+    solns["robotID"] = "N/A"
+    solns["expTime"] = "N/A"
+    solns["expDate"] = "N/A"
+    solns["roboTailID"] = "N/A"
+
+    summaryFile = os.path.join(measDir, "summary_%s_%s.json"%(imgName, vers))
+    with open(summaryFile, "w") as f:
+        json.dump(solns, f, indent=4)
+
+    # write html file
+    env = Environment(
+        loader=PackageLoader('fibermeas', 'htmlTemplates'),
+        autoescape=select_autoescape(['html', 'xml'])
+    )
+
+    template = env.get_template("summary.html")
+    output = template.render(solns)
+
+    summaryPath = os.path.join(measDir, "summary_%s_%s.html"%(imgName, vers))
+    with open(summaryPath, "w") as f:
+        f.write(output)
+
 
     # plotSolnsOnImage(
     #     imgData, rot+.15, betaArmWidth, ferruleCenRow,ferruleCenCol,
@@ -289,54 +475,54 @@ def solveImage(imageFile):
     # visualize results
 
 
-def findMaxResponse(df, dbawDist, rotDist):
-    """dbawDist is absoute deviation from dbaw at max
-       rotDist is absoulte deviation from imgRot at max
+# def findMaxResponse(df, dbawDist, rotDist):
+#     """dbawDist is absoute deviation from dbaw at max
+#        rotDist is absoulte deviation from imgRot at max
 
-       grab solutions in the locality of the max response
+#        grab solutions in the locality of the max response
 
-       returns
-       argMaxSol: pandas series for parameters at maxCorrelation
-       cutDF: sliced input dataframe with results falling within
-            beta arm distance and rot distance constraints
-    """
-    amax = df["maxCorr"].idxmax() # where is the correlation maximized?
-    argMaxSol = df.iloc[amax]
-    dbaw = argMaxSol["dBetaWidth"]
-    rot = argMaxSol["imgRot"]
+#        returns
+#        argMaxSol: pandas series for parameters at maxCorrelation
+#        cutDF: sliced input dataframe with results falling within
+#             beta arm distance and rot distance constraints
+#     """
+#     amax = df["maxCorr"].idxmax() # where is the correlation maximized?
+#     argMaxSol = df.iloc[amax]
+#     dbaw = argMaxSol["dBetaWidth"]
+#     rot = argMaxSol["imgRot"]
 
-    # search around the argmax to average
-    df = df[numpy.abs(df["dBetaWidth"] - dbaw) <= dbawDist]
-    cutDF = df[numpy.abs(df["imgRot"] - rot) <= rotDist].reset_index()
+#     # search around the argmax to average
+#     df = df[numpy.abs(df["dBetaWidth"] - dbaw) <= dbawDist]
+#     cutDF = df[numpy.abs(df["imgRot"] - rot) <= rotDist].reset_index()
 
-    # create an argMaxSol analog by averaging over nearby values
-    avgMaxSol = {}
-    for key in ["imgRot", "dBetaWidth", "argCol", "argRow", "meanCol", "meanRow"]:
+#     # create an argMaxSol analog by averaging over nearby values
+#     avgMaxSol = {}
+#     for key in ["imgRot", "dBetaWidth", "argCol", "argRow", "meanCol", "meanRow"]:
 
-        marg = cutDF.groupby([key]).sum()["maxCorr"]
-        keyVal = marg.index.to_numpy()
-        corrVal = marg.to_numpy()
-        corrValNorm = corrVal / numpy.sum(corrVal)
+#         marg = cutDF.groupby([key]).sum()["maxCorr"]
+#         keyVal = marg.index.to_numpy()
+#         corrVal = marg.to_numpy()
+#         corrValNorm = corrVal / numpy.sum(corrVal)
 
-        # determine expected value and variance
-        meanPar = numpy.sum(keyVal*corrValNorm)
-        varPar = numpy.sum((keyVal-meanPar)**2*corrValNorm)
-        print("par stats", key, meanPar, varPar)
-
-
-        avgMaxSol[key] = meanPar
-
-        # plt.figure()
-        # plt.plot(keyVal, corrValNorm, 'ok-')
-        # plt.title(key)
-        # plt.show()
+#         # determine expected value and variance
+#         meanPar = numpy.sum(keyVal*corrValNorm)
+#         varPar = numpy.sum((keyVal-meanPar)**2*corrValNorm)
+#         print("par stats", key, meanPar, varPar)
 
 
-        # import pdb; pdb.set_trace()
+#         avgMaxSol[key] = meanPar
+
+#         # plt.figure()
+#         # plt.plot(keyVal, corrValNorm, 'ok-')
+#         # plt.title(key)
+#         # plt.show()
+
+
+#         # import pdb; pdb.set_trace()
 
 
 
-    return argMaxSol, pd.Series(avgMaxSol), cutDF
+#     return argMaxSol, pd.Series(avgMaxSol), cutDF
 
 
 if __name__ == "__main__":
