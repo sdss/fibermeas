@@ -52,8 +52,11 @@ betaArmWidth = 3  # mm
 # fiber radius in microns
 fiberCoreRad = 120/2.
 
-# image scale in microns per pixel
-imgScale = 2.78
+# image scale in microns per pixel (from rough measure)
+# imgScale = 2.78
+
+# from ricks header
+imgScale = 3.3043
 
 
 # directory stuff

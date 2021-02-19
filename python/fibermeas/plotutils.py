@@ -7,7 +7,7 @@ from .constants import imgScale, ferrule2Top, betaArmWidth, MICRONS_PER_MM
 from .constants import fiber2ferrule, vers
 
 
-def imshow(imgData):
+def imshow(imgData, doExtent=False):
     """Show an image
 
     Plots an image using matplotlib's pyplot.imshow, but adjusts the extent
@@ -19,9 +19,13 @@ def imshow(imgData):
     imgData : ndarray
         2D array representing an image [rows, columns].
     """
-    nrows, ncols = imgData.shape
-    # extent = [0, ncols, 0, nrows]
-    plt.imshow(imgData, origin="lower") #, extent=extent)
+
+    if doExtent:
+        nrows, ncols = imgData.shape
+        extent = [0, ncols, 0, nrows]
+        plt.imshow(imgData, origin="lower", extent=extent)
+    else:
+        plt.imshow(imgData, origin="lower")
 
 
 def plotCircle(x, y, r, color="red", linestyle="-"):

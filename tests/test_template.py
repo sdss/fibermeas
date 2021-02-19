@@ -34,9 +34,10 @@ def test_template():
 
 if __name__ == "__main__":
     imgRots = [-4, 0, 4]
+    imgRots = [-4]
     for imgRot in imgRots:
         plt.figure()
-        temp = template.betaArmTemplate(imgRot=imgRot, betaArmWidth=3.2)
+        temp = template.betaArmTemplate(imgRot=imgRot, betaArmWidth=3)
         plt.title("imgRot=%i"%imgRot)
         imshow(temp)
         print("sum: ", numpy.sum(temp))

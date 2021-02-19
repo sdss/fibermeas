@@ -23,8 +23,11 @@ from .constants import ferrule2Top, betaArmRadius
 # only need positive rotations, negatives
 # are found by inverting the x axis (which is faster) than
 # creating a + and - rot template separately
-rotVary = numpy.linspace(-.3, 0.3, 91)  # degrees
-betaArmWidthVary = numpy.linspace(-.005, .03, 41) + betaArmWidth  # mm
+# rotVary = numpy.linspace(-4, 4, 21)  # degrees
+rotVary = [0]
+betaArmWidthVary = [betaArmWidth]
+
+# betaArmWidthVary = numpy.linspace(-.05, .05, 21) + betaArmWidth  # mm
 upsample = 1
 blurMag = 1
 
@@ -64,19 +67,29 @@ def betaArmTemplate(
 
     """
 
+    if numpy.abs(imgRot) > 4:
+        raise RuntimeError(
+            "max rotation set at 4 deg, need to test if this isn't sufficient"
+        )
+
     if upsample % 2 == 0:
         raise RuntimeError("upsample parameter must be odd!")
 
     # pick a size for this template (big enough to get the whole beta arm in)
-    size = int(2.1 * met2top * MICRONS_PER_MM / imgScale)
+    # plus a 45 deg rotation for blurring
+    # should be 1.9
+    initialSize = int(1.7 * met2top * MICRONS_PER_MM / imgScale)
+    # finalSize = int(1.9 * met2top * MICRONS_PER_MM / imgScale)
 
-    if size % 2 == 0:
-        size += 1  # make it odd so a pixel is centered
-    temp = numpy.zeros((size * upsample, size * upsample))
+    # initialSize = int(5 * met2top * MICRONS_PER_MM / imgScale)
+
+    if initialSize % 2 == 0:
+        initialSize += 1  # make it odd so a pixel is centered
+    temp = numpy.zeros((initialSize * upsample, initialSize * upsample))
 
     # midX/Y the central pixel in template
     # template is odd sized so this pixel is really the center
-    midX = int(size * upsample / 2)
+    midX = int(initialSize * upsample / 2)
     midY = midX
 
     # draw beta arm outline
@@ -95,6 +108,8 @@ def betaArmTemplate(
 
     topside = midY + int((ferrule2Top) * MICRONS_PER_MM / imgScale * upsample)
     temp[topside:, :] = 1
+
+    # print("ratio y/x", (topside-50)/(rside-lside))
 
     curveRadPx = int(betaArmRadius * MICRONS_PER_MM / imgScale * upsample)
     yoff = topside - curveRadPx
@@ -130,20 +145,26 @@ def betaArmTemplate(
     # give it a bit of a blur by scale so it's approx blurMag pixels after downsampling
     temp = gaussian(temp, upsample * blurMag)
     temp = sobel(temp)
+    # temp = gaussian(temp, upsample*blurMag)
     # blank out the lower rows so that after rotating
     # the edge will be the same permiter length (no cropping out of the frame)
+
     temp[:50,:] = 0
 
     # add extra buffer around edge to not chop the signal
 
-    # rotate whole image to 45 then back to desired imgRot
+    # rotate whole image to -5 then back to desired imgRot
     # this is important for handling 0 rotation
     # every image gets rotated twice which
     # evens out the blurring and makes it so that
     # a zero rotation image gives a similar response
     # to that of rotated images
-    temp = rotate(temp, -45)
-    temp = rotate(temp, 45+imgRot)
+
+    # temp = rotate(temp, -5)
+
+    # temp = rotate(temp, 5+imgRot)
+
+    temp = rotate(temp, imgRot)
 
     # scale back down to expected image size
     if upsample != 1:

@@ -21,7 +21,7 @@ from .constants import imgScale, ferrule2Top, MICRONS_PER_MM
 from .constants import betaAxis2ferrule, templateFilePath, versionDir, vers
 from .constants import modelMetXY, modelBossXY, modelApXY
 from .template import rotVary, betaArmWidthVary, upsample
-from .plotutils import imshow, plotGridEval, plotSolnsOnImage
+from .plotutils import imshow, plotGridEval, plotSolnsOnImage, plotCircle
 
 t1 = time.time()
 templates = numpy.load(templateFilePath)
@@ -79,6 +79,19 @@ def correlateWithTemplate(image, template):
     corr = signal.fftconvolve(image, template[::-1,::-1], mode="same")
     maxResponse = numpy.max(corr)
     pixel = numpy.unravel_index(numpy.argmax(corr), corr.shape)
+
+    plt.figure()
+    imshow(image)
+
+    plt.figure()
+    imshow(template)
+
+
+    plt.figure()
+    imshow(corr)
+    plotCircle(pixel[1], pixel[0], r=5)
+    plt.show()
+
     return maxResponse, pixel
 
 
@@ -156,14 +169,37 @@ def identifyFibers(imgData):
     regions = []
     for ii, region in enumerate(props):
         ed = region.equivalent_diameter
-        if ed < 45 or ed > 60 or region.eccentricity > 0.3:
+        p = region.perimeter
+        fracPerim = p / (2*numpy.pi*ed/2)
+
+        # compare the perimeter to find round things
+        if fracPerim > 1.1:
+            continue
+        if fracPerim < 0.9:
+            continue
+        if ed < 35 or ed > 68 or region.eccentricity > 0.5:
             # filter out unlikely regions by looking for circular
             # things of a certain size
             continue
+            # pass
+            # continue
         # plotCircle(cc+0.5, cr+0.5, ed/2)
         # plt.text(cc,cr,"%i"%ii)
         # print("%i"%ii, cr, cc, region.equivalent_diameter, region.bbox_area, region.eccentricity, region.perimeter)
         regions.append(region)
+
+    # plt.figure()
+    # imshow(imgData)
+    # for region in regions:
+    #     yCent, xCent = region.weighted_centroid
+    #     rad = region.equivalent_diameter/2
+    #     print("equiv dia", region.equivalent_diameter)
+    #     print("eccen", region.eccentricity)
+    #     print("perim", region.perimeter, region.perimeter/(2*numpy.pi*rad))
+    #     print("axis lengths", region.minor_axis_length, region.major_axis_length)
+    #     plotCircle(xCent, yCent, rad)
+    # plt.show()
+
 
     if len(regions) != 3:
         raise RuntimeError("Found > 3 Fibers!!!")
@@ -195,7 +231,7 @@ def identifyFibers(imgData):
     return fiberDict
 
 
-def processImage(imageFile):
+def processImage(imageFile, invertRow=False, invertCol=False):
     """Measure the locations of fibers in the beta arm reference frame.
     Raw measurement data are put in a new directory:
     config["outputDirectory"]/imageFile/
@@ -225,9 +261,18 @@ def processImage(imageFile):
     shutil.copy(imageFile, os.path.join(measDir, imgBaseName))
 
     data = fitsio.read(imageFile)
+    if invertRow:
+        data = data[::-1,:]
+    if invertCol:
+        data = data[:,::-1]
     # normalize data
     data = data / numpy.max(data)
     # first identify fiber locations in the image
+
+    # plt.figure()
+    # imshow(sobel(data))
+    # plt.show()
+
     fiberMeas = identifyFibers(data)
 
     # write fiber regions as a json file
@@ -241,12 +286,15 @@ def processImage(imageFile):
     for ii, imgRot in enumerate(rotVary):
         for jj, dBAW in enumerate(betaArmWidthVary):
             indList.append([ii,jj,data])
+            doOne(indList[-1])
 
-    pool = Pool(config["useCores"])
-    t1 = time.time()
-    out = numpy.array(pool.map(doOne, indList))
-    print("took %2.f mins"%((time.time()-t1)/60.))
-    pool.close()
+
+    # pool = Pool(config["useCores"])
+    # t1 = time.time()
+    # out = numpy.array(pool.map(doOne, indList))
+    # print("took %2.f mins"%((time.time()-t1)/60.))
+    # pool.close()
+
 
     # flatten the output list to pack into a table
     # out = list(itertools.chain(*out))
@@ -257,7 +305,7 @@ def processImage(imageFile):
     maxCorr.to_csv(outFile)
 
 
-def solveImage(imageFile):
+def solveImage(imageFile, invertRow=False, invertCol=False):
     """Use the files output by processImage to determine the fiber coordinates
     in the beta arm coordinate system.  Various output files are written to:
     config["outputDirectory"]/imageFile/
@@ -301,6 +349,10 @@ def solveImage(imageFile):
     # computeAngles(fiberMeasDict)
 
     imgData = fitsio.read(imageFile)
+    if invertRow:
+        imgData = imgData[::-1,:]
+    if invertCol:
+        imgData = imgData[:,::-1]
 
     fullFigName, zoomFigName = plotSolnsOnImage(
         imgData, rot, betaArmWidth, ferruleCenRow, ferruleCenCol,
@@ -462,161 +514,6 @@ def solveImage(imageFile):
         f.write(output)
 
 
-    # plotSolnsOnImage(
-    #     imgData, rot+.15, betaArmWidth, ferruleCenRow,ferruleCenCol,
-    #     fiberMeasDict, filename)
-
-    # plt.show()
-
-    # plt.show()
-
-    # find the best correlated template
-
-    # visualize results
-
-
-# def findMaxResponse(df, dbawDist, rotDist):
-#     """dbawDist is absoute deviation from dbaw at max
-#        rotDist is absoulte deviation from imgRot at max
-
-#        grab solutions in the locality of the max response
-
-#        returns
-#        argMaxSol: pandas series for parameters at maxCorrelation
-#        cutDF: sliced input dataframe with results falling within
-#             beta arm distance and rot distance constraints
-#     """
-#     amax = df["maxCorr"].idxmax() # where is the correlation maximized?
-#     argMaxSol = df.iloc[amax]
-#     dbaw = argMaxSol["dBetaWidth"]
-#     rot = argMaxSol["imgRot"]
-
-#     # search around the argmax to average
-#     df = df[numpy.abs(df["dBetaWidth"] - dbaw) <= dbawDist]
-#     cutDF = df[numpy.abs(df["imgRot"] - rot) <= rotDist].reset_index()
-
-#     # create an argMaxSol analog by averaging over nearby values
-#     avgMaxSol = {}
-#     for key in ["imgRot", "dBetaWidth", "argCol", "argRow", "meanCol", "meanRow"]:
-
-#         marg = cutDF.groupby([key]).sum()["maxCorr"]
-#         keyVal = marg.index.to_numpy()
-#         corrVal = marg.to_numpy()
-#         corrValNorm = corrVal / numpy.sum(corrVal)
-
-#         # determine expected value and variance
-#         meanPar = numpy.sum(keyVal*corrValNorm)
-#         varPar = numpy.sum((keyVal-meanPar)**2*corrValNorm)
-#         print("par stats", key, meanPar, varPar)
-
-
-#         avgMaxSol[key] = meanPar
-
-#         # plt.figure()
-#         # plt.plot(keyVal, corrValNorm, 'ok-')
-#         # plt.title(key)
-#         # plt.show()
-
-
-#         # import pdb; pdb.set_trace()
-
-
-
-#     return argMaxSol, pd.Series(avgMaxSol), cutDF
-
-
 if __name__ == "__main__":
     pass
-
-
-###################################
-
-    # # generateOuterTemplates()
-
-    # # refImg25sor = rotate(sobel(data), 2.5)
-
-    # # refImgsor = sobel(data)
-    # refImg = sobel(data)
-    # # fitsio.write("refImg.fits", refImg) # angle measured in ds9 90.15, 89.5, 359.9,
-
-    # # fits measured
-    # a = numpy.mean([90-90.15, 90-89.5, 90-(359.9-360+90)])
-    # print("a", a)
-
-    # refImg25 = rotate(refImg, 2.5)
-    # # fitsio.write("refImg25.fits", refImg25) # 87.688336, 87.288246, 357.56788
-    # a2 = numpy.mean([90-87.688336, 90-87.288246, 90-(357.56788-360+90)])
-    # print("a2", a2)
-
-
-    # # def genDataFrame():
-    # #     indList = []
-    # #     for ii, imgRot in enumerate(rotVary):
-    # #         for jj, dBAW in enumerate(betaArmWidthVary):
-    # #             indList.append([ii,jj,refImg25])
-
-    # #     pool = Pool(config["useCores"])
-    # #     t1 = time.time()
-    # #     out = numpy.array(pool.map(doOne, indList))
-    # #     print("took %2.f mins"%((t1-time.time())/60.))
-    # #     pool.close()
-    # #     maxCorr = pd.DataFrame(out, columns=["imgRot", "dBetaWidth", "maxCorr", "argRow", "argCol", "meanRow", "meanCol", "varRow", "varCol"])
-    # #     maxCorr.to_csv("maxCorr25.csv")
-
-
-
-    # # genDataFrame()
-
-    # # import pdb; pdb.set_trace()
-
-    # # import pdb; pdb.set_trace()
-
-    # # genDataFrame()
-
-    # # maxCorr is unrotated image
-    # # maxCorr25.csv is rotated by 2.5 degrees
-
-    # maxCorr = pd.read_csv("maxCorr.csv", index_col=0)
-
-    # plotMarginals(maxCorr)
-
-    # plt.show()
-
-
-
-    # maxCorr25 = pd.read_csv("maxCorr25.csv", index_col=0)
-
-    # plotMarginals(maxCorr25)
-
-    # plt.show()
-
-    # dbwDist = 0.02
-    # rotDist = 0.5
-
-    # sol, avgSol, maxCorrCut = findMaxResponse(maxCorr, dbwDist, rotDist)
-
-    # plotMarginals(maxCorrCut)
-
-    # plt.show()
-
-    # sol25, avgSol25, maxCorrCut25 = findMaxResponse(maxCorr25, dbwDist, rotDist)
-
-    # plotMarginals(maxCorrCut)
-    # plt.show()
-
-
-    # # amax = maxCorr["maxCorr"].idxmax()
-    # # sol = maxCorr.iloc[amax]
-
-    # # amax = maxCorr25["maxCorr"].idxmax()
-    # # sol25 = maxCorr25.iloc[amax]
-
-    # # import pdb; pdb.set_trace()
-
-    # plotResults([sol, avgSol], refImg)
-
-    # plotResults([sol25, avgSol25], refImg25)
-
-    # import pdb; pdb.set_trace()
-
 
