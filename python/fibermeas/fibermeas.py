@@ -10,7 +10,7 @@ import numpy
 from scipy import signal
 import matplotlib.pyplot as plt
 import pandas as pd
-from skimage.filters import sobel, gaussian
+from skimage.filters import sobel, gaussian, median
 from skimage.measure import regionprops, label
 import fitsio
 import scipy
@@ -27,10 +27,14 @@ from .plotutils import imshow, plotSolnsOnImage, plotCircle
 
 import seaborn as sns
 
-# for use in edge detection
-IQR_THRESH = 3  # throw out points beyond this inner quartile range
-PX_SMOOTH = 5  # pixels to smooth the original image before edge detection
+from xhtml2pdf import pisa
 
+# for use in edge detection / fitting
+IQR_THRESH = 3  # detect points above this iqr thresh
+PX_SMOOTH = 5  # pixels to smooth the original image before edge detection
+# lower limit for beta arm widths to use for centerline fitting
+# smaller beta widths are less robust because edge detection is oblique
+BETA_CEN_PERCENTILE = 40
 
 def detectFirstFallingEdge(counts, pixels, thresh, skipPix=75):
     hitThresh = False
@@ -69,13 +73,6 @@ def detectFirstFallingEdge(counts, pixels, thresh, skipPix=75):
     sn2 = numpy.max(countsMeas) / thresh
     skew = numpy.sum(pdf * (pixMeas - meanPix)**2)
 
-    # plt.figure()
-    # plt.plot(pixels, counts)
-    # plt.axvspan(meanPix-varPix, meanPix+varPix, color="red", alpha=0.2)
-    # plt.axvline(meanPix, color="red")
-    # plt.xlim([meanPix-200, meanPix+200])
-    # plt.show()
-
     return meanPix, varPix, len(pixMeas), sn2, skew
 
 
@@ -84,15 +81,6 @@ def normalizeArr(a):
     iqr = scipy.stats.iqr(a)
     a = a - median
     return a, iqr
-
-    # print("iqr")
-    # bgCalc1 = list(imgData1[:, :350].flatten())
-    # bgCalc2 = list(imgData1[:, 1410:].flatten())
-    # bgCalc = numpy.array(bgCalc1+bgCalc2)
-    # bgMean = numpy.mean(bgCalc)
-    # bgStd = numpy.std(bgCalc)
-
-    # imgData1 = imgData1 - bgMean
 
 
 def detectBetaArmEdges(imgData):
@@ -268,45 +256,16 @@ def solveBetaFrameOrientation(edgeDetections, imgScale):
 
     # keep data in the innerquartile range based on beta arm width
 
-    plCut = numpy.percentile(betaMeasX.baw, 40) # effectively cuts out tip curve
-    # puCut = numpy.percentile(betaMeasX.baw, 99.5)
+    plCut = numpy.percentile(betaMeasX.baw, BETA_CEN_PERCENTILE) # effectively cuts out tip curve
     betaMeasXClip = betaMeasX[betaMeasX.baw > plCut]
 
     bawMeasMM = numpy.median(betaMeasXClip.baw) * imgScale / MICRONS_PER_MM
 
-    # betaMeasX = betaMeasX[betaMeasX.baw < puCut]
 
-    sns.lineplot(x="yCent", y="baw", data=betaMeasXClip, color="red")
-    plt.xlabel("CCD row")
-    plt.ylabel("beta arm width (pixel)")
-
-    print("len", len(betaMeasXClip))
-
-    # plt.figure()
-    # sns.lineplot(x="yCent", y="baw", data=betaMeasXClip)
-
-    # realWidths = numpy.array(betaMeasXClip.baw)*imgScale / 1000 # in mm
-    # print("median width", numpy.median(realWidths), numpy.mean(realWidths))
-
-    # minWidth = numpy.min(realWidths)
-    # maxWidth = numpy.max(realWidths)
-    # bins = numpy.arange(minWidth,maxWidth,0.005) # 5 micron spacing
-    # plt.figure()
-    # plt.hist(realWidths, bins=bins)
-    # plt.title("baw")
 
     ctrLine = numpy.array(betaMeasXClip.bawCenX)
     ctrErr = numpy.sqrt(betaMeasXClip.bawCenXVar)
     ys = numpy.array(betaMeasXClip.yCent)
-
-    # import pdb; pdb.set_trace()
-
-    plt.figure()
-    plt.errorbar(ctrLine, ys, xerr=ctrErr)
-    # plt.ylim([0, imgData1.shape[1]])
-    # plt.plot(ys, ctrLine, '.')
-    # plt.xlim([200,600])
-    # plt.show()
 
     # linear fit x as a function of y (chi2 min)
     # hogg paper data analysis recipes
@@ -317,45 +276,23 @@ def solveBetaFrameOrientation(edgeDetections, imgScale):
     A = numpy.ones((nPts,2))
     A[:, 1] = ys
 
-    (xIntercept,xSlope), resid, rank, s = numpy.linalg.lstsq(A, Y)
-    fitX = xIntercept + xSlope * ys
+    (xIntercept, xSlope), resid, rank, s = numpy.linalg.lstsq(A, Y)
 
-    plt.plot(fitX, ys, '--', color="red")
-    plt.xlabel("CCD col")
-    plt.ylabel("CCD row")
-    plt.title("beta arm midline")
 
     # this takes into account sigmas for measurement
+    # probably not necessary for this but keeping it
+    # incase of revisit
     # (b2,m2), resid, rank, s = numpy.linalg.lstsq(
     #     A.T @ Cinv @ A,
     #     A.T @ Cinv @Y
     # )
 
-    # fitX2 = b2 + m2 * ys
-    # plt.plot(ys, fitX2, '--', color="black")
-
-    # import pdb; pdb.set_trace()
-    # plt.show()
-
-    # plot 2nd derivative
-    # d1 = numpy.gradient(betaMeasX.baw)
-    # d2 = numpy.gradient(d1)
-    # plt.figure()
-    # plt.plot(ys, d1)
-
-    # print(b-b2, m/m2)
-
-    # import pdb; pdb.set_trace()
 
     # project "down" measurements onto this line
     dfDown = df[df.direction == "d"]
-    # move from y, x to x, y
-    # yIntercept = -1*b/m
-    # ySlope = 1/m
 
-    # plt.figure()
-    # sns.scatterplot(x="xCent", y="yCent", data=dfDown)
-    # plt.show()
+
+
 
     # shift x data by xIntercept, such that
     # beta arm midline passes through origin
@@ -379,13 +316,7 @@ def solveBetaFrameOrientation(edgeDetections, imgScale):
 
     xyRot = rotMat.dot(xys)
 
-    # plt.figure()
-    # plt.plot(xys[0,:], xys[1,:])
-    # plt.title("no rot")
 
-    # plt.figure()
-    # plt.plot(xyRot[0,:], xyRot[1,:])
-    # plt.title("Top Edge Detections")
 
     # find the "flat spot" on the beta arm tip
     nomRadMM = constants.betaArmWidth/2 - constants.betaArmRadius
@@ -394,22 +325,11 @@ def solveBetaFrameOrientation(edgeDetections, imgScale):
     keep = numpy.abs(xyRot[0,:]) < nomRadPx
     xyRotClip = xyRot[:, keep]
 
-    # plt.plot(xyRotClip[0, :], xyRotClip[1, :], color="red", label="used detections")
-    # plt.xlabel("x value (rotated pixels)")
-    # plt.ylabel("y value (rotated pixels)")
-    # plt.legend()
 
     yArmTop = numpy.median(xyRotClip[1])
     yFerruleCen = yArmTop - ferrule2Top * MICRONS_PER_MM / imgScale
     xFerruleCen = 0
 
-    # plt.figure()
-    # plt.hist(xyRotClip[1], bins=15)
-    # plt.axvline(yArmTop, color='red')
-    # # plt.xlim([915, 930])
-    # # plt.ylim([0,125])
-    # plt.title("top edge detect\nnpts=%i"%len(xyRotClip[1]))
-    # plt.xlabel("y value (rotated pixels)")
 
     # rotate back into ccdFrame
     ferruleCenCol, ferruleCenRow = invRotMat.dot([xFerruleCen, yFerruleCen])
@@ -465,28 +385,12 @@ def identifyFibers(imgData):
             # filter out unlikely regions by looking for circular
             # things of a certain size
             continue
-            # pass
-            # continue
-        # plotCircle(cc+0.5, cr+0.5, ed/2)
-        # plt.text(cc,cr,"%i"%ii)
-        # print("%i"%ii, cr, cc, region.equivalent_diameter, region.bbox_area, region.eccentricity, region.perimeter)
-        regions.append(region)
 
-    # plt.figure()
-    # imshow(imgData)
-    # for region in regions:
-    #     yCent, xCent = region.weighted_centroid
-    #     rad = region.equivalent_diameter/2
-    #     print("equiv dia", region.equivalent_diameter)
-    #     print("eccen", region.eccentricity)
-    #     print("perim", region.perimeter, region.perimeter/(2*numpy.pi*rad))
-    #     print("axis lengths", region.minor_axis_length, region.major_axis_length)
-    #     plotCircle(xCent, yCent, rad)
-    # plt.show()
+        regions.append(region)
 
 
     if len(regions) != 3:
-        raise RuntimeError("Found > 3 Fibers!!!")
+        raise RuntimeError("Found != 3 Fibers!!!")
 
     # sort regions by row (metrology fiber should be lowest column)
     regions.sort(key=lambda region: region.weighted_centroid[0])
@@ -560,10 +464,6 @@ def processImage(imageFile, invertRow=True, invertCol=True):
     data = data / numpy.max(data)
     # first identify fiber locations in the image
 
-    # plt.figure()
-    # imshow(sobel(data))
-    # plt.show()
-
     fiberMeasDict = identifyFibers(data)
 
     # write fiber regions as a json file
@@ -601,6 +501,22 @@ def processImage(imageFile, invertRow=True, invertCol=True):
     numpy.savetxt(outFile, xyRotClip)
 
     ##### generate plots #####
+
+    # this might be genious?
+    # _data = sobel(gaussian(data,3))
+    # _data = _data > numpy.percentile(_data, 70)
+
+    # # _data = median(_data)
+    # # _data = sobel(_data)
+    # # _data = _data > numpy.percentile(_data, 90)
+    # plt.figure()
+    # imshow(_data)
+    # plt.show()
+
+    # data = sobel(data)
+    # data = data > numpy.percentile(data, 75)
+    # data = median(data)
+    # data = sobel(data)
 
     imgList = plotSolnsOnImage(
         data, results["rot"], results["betaArmWidthMM"],
@@ -648,16 +564,17 @@ def processImage(imageFile, invertRow=True, invertCol=True):
     # plot beta center line
 
     ctrLine = numpy.array(betaMeasXClip.bawCenX)
-    ctrErr = numpy.sqrt(betaMeasXClip.bawCenXVar)
+    # ctrErr = numpy.sqrt(betaMeasXClip.bawCenXVar)
     ys = numpy.array(betaMeasXClip.yCent)
-    plt.errorbar(ctrLine, ys, xerr=ctrErr)
+    # plt.errorbar(ctrLine, ys, xerr=ctrErr)
+    plt.plot(ctrLine, ys, '.k')
 
     fitX = results["xIntercept"] + results["xSlope"] * ys
 
     plt.plot(fitX, ys, '--', color="red", label="beta centerline fit")
     plt.xlabel("CCD col (px)")
     plt.ylabel("CCD row (px)")
-    plt.title("beta arm midline")
+    plt.title("beta arm midline\n(ccd rotation)")
     plt.legend()
 
     plt.savefig(figName, dpi=350)
@@ -667,7 +584,7 @@ def processImage(imageFile, invertRow=True, invertCol=True):
     # plot rotated top edge detections
     figName = os.path.join(measDir, "topEdge_%s_%s.png"%(imgName, vers))
     plt.figure()
-    plt.plot(xyRot[0,:], xyRot[1,:], color="black")
+    plt.plot(xyRot[0,:], xyRot[1,:], '.', color="black")
     plt.axis("equal")
     plt.title("Top Edge Detections\n(down scan)")
 
@@ -689,8 +606,6 @@ def processImage(imageFile, invertRow=True, invertCol=True):
     plt.legend()
     plt.savefig(figName, dpi=350)
     imgList.append(figName)
-
-    # plt.show()
 
 
     # solve for beta arm coordinates of fibers and summarize everything
@@ -797,9 +712,9 @@ def processImage(imageFile, invertRow=True, invertCol=True):
     solns["apogeeCenCCD"] = ccdApogeeXY
 
     # rough diameter in pixels in original image
-    solns["metrologyDiaCCD"] = fiberMeasDict["metrology"]["equivalentDiameter"]
-    solns["bossDiaCCD"] = fiberMeasDict["boss"]["equivalentDiameter"]
-    solns["apogeeDiaCCD"] = fiberMeasDict["apogee"]["equivalentDiameter"]
+    solns["metrologyDiaUM"] = fiberMeasDict["metrology"]["equivalentDiameter"] * imgScale
+    solns["bossDiaUM"] = fiberMeasDict["boss"]["equivalentDiameter"] * imgScale
+    solns["apogeeDiaUM"] = fiberMeasDict["apogee"]["equivalentDiameter"] * imgScale
 
     # rough eccentricity in pixels in original image
     solns["metrologyEccentricity"] = fiberMeasDict["metrology"]["eccentricity"]
@@ -847,4 +762,26 @@ def processImage(imageFile, invertRow=True, invertCol=True):
     summaryPath = os.path.join(measDir, "summary_%s_%s.html"%(imgName, vers))
     with open(summaryPath, "w") as f:
         f.write(output)
+
+    # write pdf from html
+    summaryPDF = os.path.join(measDir, "summary_%s_%s.pdf"%(imgName, vers))
+    pdfF = open(summaryPDF, "w+b")
+    htmlF = open(summaryPath, "r")
+
+    pisa_status = pisa.CreatePDF(
+        htmlF,
+        dest=pdfF,
+        )
+
+    pdfF.close()
+    htmlF.close()
+
+    print(pisa_status.err)
+
+
+
+
+
+
+
 

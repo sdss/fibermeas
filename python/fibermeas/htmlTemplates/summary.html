@@ -49,7 +49,7 @@ This is roughly a 90 deg rotation from the CCD xy frame.</h4>
 <table style="width:800px">
   <tr>
     <th>Fiber</th>
-    <th> diameter (px) </th>
+    <th> diameter (um) </th>
     <th> eccentricity </th>
     <th>x (mm)</th>
     <th>y (mm)</th>
@@ -59,7 +59,7 @@ This is roughly a 90 deg rotation from the CCD xy frame.</h4>
   </tr>
   <tr>
     <td>Metrology</td>
-    <td>{{ "%.1f" | format(metrologyDiaCCD) }} </td>
+    <td>{{ "%.1f" | format(metrologyDiaUM) }} </td>
     <td>{{ "%.2f" | format (metrologyEccentricity) }} </td>
     <td>{{ "%.4f"| format(metrologyXYmm[0]) }}</td>
     <td>{{ "%.4f"| format(metrologyXYmm[1]) }}</td>
@@ -69,7 +69,7 @@ This is roughly a 90 deg rotation from the CCD xy frame.</h4>
    </tr>
   <tr>
     <td>Boss</td>
-    <td>{{ "%.1f" | format(bossDiaCCD) }} </td>
+    <td>{{ "%.1f" | format(bossDiaUM) }} </td>
     <td>{{ "%.2f" | format (bossEccentricity) }} </td>
     <td>{{ "%.4f"| format(bossXYmm[0]) }}</td>
     <td>{{ "%.4f"| format(bossXYmm[1]) }}</td>
@@ -79,7 +79,7 @@ This is roughly a 90 deg rotation from the CCD xy frame.</h4>
    </tr>
   <tr>
     <td>Apogee</td>
-    <td>{{ "%.1f" | format(apogeeDiaCCD) }} </td>
+    <td>{{ "%.1f" | format(apogeeDiaUM) }} </td>
     <td>{{ "%.2f" | format (apogeeEccentricity) }} </td>
     <td>{{ "%.4f"| format(apogeeXYmm[0]) }}</td>
     <td>{{ "%.4f"| format(apogeeXYmm[1]) }}</td>
@@ -97,7 +97,7 @@ the found center of the fibers.</h4>
 
 {% for imgPath in imgList %}
   <br>
-  <img src="{{ imgPath }}" width="1200">
+  <img src="{{ imgPath }}" height="500">
 
 {% endfor %}
 

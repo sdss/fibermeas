@@ -2,6 +2,7 @@ import numpy
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+from skimage.filters import sobel
 
 from .constants import ferrule2Top, betaArmWidth, MICRONS_PER_MM
 from .constants import fiber2ferrule, vers
@@ -23,9 +24,10 @@ def imshow(imgData, doExtent=False):
     if doExtent:
         nrows, ncols = imgData.shape
         extent = [0, ncols, 0, nrows]
-        plt.imshow(imgData, origin="lower", extent=extent)
+        handle = plt.imshow(imgData, origin="lower", extent=extent)
     else:
-        plt.imshow(imgData, origin="lower")
+        handle = plt.imshow(imgData, origin="lower")
+    return handle
 
 
 def plotCircle(x, y, r, color="red", linestyle="-"):
@@ -85,8 +87,9 @@ def plotSolnsOnImage(
     zoomFigName : str
         path to fiber-zoomed figure
     """
+
     plt.figure(figsize=(10,7))
-    imshow(imgData, doExtent=False)
+    imshowHandle = imshow(imgData, doExtent=False)
 
     # plot lines indicating the beta arm
     # coordinate system
@@ -181,20 +184,32 @@ def plotSolnsOnImage(
 
     # plot measured positions of fibers (red x's) and radii
     figNames = []
-    for fiberID, fiberMeas in fiberMeasDict.items():
-        r = fiberMeas["equivalentDiameter"]/2
-        x = fiberMeas["centroidCol"]
-        y = fiberMeas["centroidRow"]
-        plt.xlim([x - r * 1.3, x + r * 1.3])
-        plt.ylim([y - r * 1.3, y + r * 1.3])
-        plt.title(fiberID)
-        figName = os.path.join(measDir, "%s_%s_%s.png"%(fiberID, imageName, vers))
-        plt.savefig(figName, dpi=350)
-        figNames.append(figName)
+    for doSobel in [False, True]:
+        if doSobel:
+            imshowData = imshowHandle.get_array()
+            s = sobel(imshowData)
+            s = s > numpy.percentile(s, 65)
+            s = sobel(s)
+            imshowHandle.set_array(s)
+        for fiberID, fiberMeas in fiberMeasDict.items():
+            r = fiberMeas["equivalentDiameter"]/2
+            x = fiberMeas["centroidCol"]
+            y = fiberMeas["centroidRow"]
+            plt.xlim([x - r * 1.3, x + r * 1.3])
+            plt.ylim([y - r * 1.3, y + r * 1.3])
+            plt.title(fiberID)
+            if doSobel:
+                figName = os.path.join(measDir, "s_%s_%s_%s.png"%(fiberID, imageName, vers))
+            else:
+                figName = os.path.join(measDir, "%s_%s_%s.png"%(fiberID, imageName, vers))
+            plt.savefig(figName, dpi=350)
+            figNames.append(figName)
 
     plt.close()
 
-    return fullFigName, zoomFigName, figNames[0], figNames[1], figNames[2]
+    allFigNames = [fullFigName, zoomFigName] + figNames
+
+    return allFigNames
 
 
 
