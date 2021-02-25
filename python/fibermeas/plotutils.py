@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 
-from .constants import imgScale, ferrule2Top, betaArmWidth, MICRONS_PER_MM
+from .constants import ferrule2Top, betaArmWidth, MICRONS_PER_MM
 from .constants import fiber2ferrule, vers
 
 
@@ -50,24 +50,10 @@ def plotCircle(x, y, r, color="red", linestyle="-"):
     plt.plot(xs, ys, linestyle, color=color)
 
 
-def plotGridEval(df, filename):
-    """Plot a vizualization of the grid search.  Save it to disk
-
-    Parameters:
-    -------------
-    df : pandas.DataFrame
-        dataframe loaded from "templateGridEval.csv"
-    """
-    plt.figure(figsize=(10,10))
-    sns.lineplot(x="rot", y="maxCorr", hue="betaArmWidth", data=df)
-    plt.savefig(filename, dpi=350)
-    plt.close()
-
-
 def plotSolnsOnImage(
     imgData, rot, betaArmWidth, ferruleCenRow,
     ferruleCenCol, fiberMeasDict, measDir,
-    imageName
+    imageName, imgScale
 ):
     """
     Visualize results plotted over the original image.  Save to filename
@@ -90,7 +76,8 @@ def plotSolnsOnImage(
         directory in which to save results
     imageName : str
         name of image corresponding to imgData (stripped of .fits)
-
+    imgScale : float
+        scale in microns per pixel
     Returns
     --------
     fullFigName : str
@@ -99,7 +86,7 @@ def plotSolnsOnImage(
         path to fiber-zoomed figure
     """
     plt.figure(figsize=(10,7))
-    imshow(imgData)
+    imshow(imgData, doExtent=False)
 
     # plot lines indicating the beta arm
     # coordinate system
@@ -157,7 +144,7 @@ def plotSolnsOnImage(
         plt.plot(
             [line_plusy[0], line_minusy[0]],
             [line_plusy[1], line_minusy[1]],
-            '--', markersize=3, color="w"
+            ':', markersize=2, color="w"
         )
 
     # plot ferrule center
@@ -185,29 +172,29 @@ def plotSolnsOnImage(
     zoomFigName = os.path.join(measDir, "zoomSoln_%s_%s.png"%(imageName, vers))
     plt.savefig(fullFigName, dpi=350)
 
+
     plt.xlim([ferruleCenCol-200, ferruleCenCol+200])
     plt.ylim([ferruleCenRow-200, ferruleCenRow+134])
+
+
     plt.savefig(zoomFigName, dpi=350)
+
+    # plot measured positions of fibers (red x's) and radii
+    figNames = []
+    for fiberID, fiberMeas in fiberMeasDict.items():
+        r = fiberMeas["equivalentDiameter"]/2
+        x = fiberMeas["centroidCol"]
+        y = fiberMeas["centroidRow"]
+        plt.xlim([x - r * 1.3, x + r * 1.3])
+        plt.ylim([y - r * 1.3, y + r * 1.3])
+        plt.title(fiberID)
+        figName = os.path.join(measDir, "%s_%s_%s.png"%(fiberID, imageName, vers))
+        plt.savefig(figName, dpi=350)
+        figNames.append(figName)
+
     plt.close()
 
-    return fullFigName, zoomFigName
+    return fullFigName, zoomFigName, figNames[0], figNames[1], figNames[2]
 
-    # plt.plot([rightLine_plusy[0], rightLine_minusy[0]], [rightLine_plusy[1], rightLine_minusy[1]], '--', color="white", linewidth=0.5)
-    # plt.plot([leftLine_plusy[0], leftLine_minusy[0]], [leftLine_plusy[1], leftLine_minusy[1]], '--', color="white", linewidth=0.5)
-    # plt.plot([topLine_plusy[0], topLine_minusy[0]], [topLine_plusy[1], topLine_minusy[1]], '--', color="white", linewidth=0.5)
-
-
-def plotMarginals(df):
-    plt.figure()
-    sns.lineplot(x="rot", y="maxCorr", hue="betaArmWidth", data=df)
-
-    plt.figure()
-    sns.lineplot(x="betaArmWidth", y="maxCorr", hue="rot", data=df)
-
-    plt.figure()
-    sns.scatterplot(x="rot", y="betaArmWidth", hue="maxCorr", data=df)
-
-    # plt.figure()
-    # sns.scatterplot(x="meanCol", y="meanRow", hue="maxCorr", data=df)
 
 

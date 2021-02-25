@@ -26,7 +26,7 @@ MICRONS_PER_MM = 1000
 met2top = 1.886  # mm
 
 #distance from beta axis to end of beta arm
-betaAxis2Top = 16.2 # mm
+betaAxis2Top = 16.2  # mm
 
 # linear distance between fiber centers
 fiber2fiber = 0.751  # mm
@@ -38,7 +38,7 @@ fiber2ferrule = 0.5 * fiber2fiber / numpy.cos(numpy.radians(30))
 
 # distance from center of ferrule to end of beta arm
 # assumes metrology fiber is lies exactly on beta arm centerline
-ferrule2Top = met2top - fiber2ferrule
+ferrule2Top = met2top - fiber2ferrule # mm
 
 # distance from beta axis to ferrule center
 betaAxis2ferrule = betaAxis2Top - ferrule2Top
@@ -55,8 +55,8 @@ fiberCoreRad = 120/2.
 # image scale in microns per pixel (from rough measure)
 # imgScale = 2.78
 
-# from ricks header
-imgScale = 3.3043
+# from ricks header microns per pixel
+# imgScale = 3.3043
 
 
 # directory stuff

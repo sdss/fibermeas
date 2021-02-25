@@ -21,7 +21,7 @@ table, th, td {
     <td>{{ roboTailID }}</td>
   </tr>
   <tr>
-    <td>measurement date</td>
+    <td>date processed</td>
     <td>{{ measDate }}</td>
   </tr>
   <tr>
@@ -44,7 +44,7 @@ table, th, td {
 
 <br>
 
-<h4> In the table below, xy are in beta arm frame.  The origin is the location of beta axis, which is inferred by fitting the beta arm outline shape and applying solid model specificications.  +x axis lies along midline of beta arm and increases toward fibers.
+<h4> In the table below, xy are in beta arm frame.  Reported errors are expected - measured positions. The origin is the location of beta axis, which is inferred by fitting the beta arm outline shape and applying solid model specificications.  +x axis lies along midline of beta arm and increases toward fibers.
 This is roughly a 90 deg rotation from the CCD xy frame.</h4>
 <table style="width:800px">
   <tr>
@@ -88,18 +88,19 @@ This is roughly a 90 deg rotation from the CCD xy frame.</h4>
     <td>{{ "%.1f"| format(apogeeErrMagUm) }}</td>
    </tr>
 </table>
-<br>
-<h4> Results of grid evaulation on beta arm width and CCD rotation.  Best fit is where correlation is maximized.</h4>
-<img src="{{ tempEvalFigName }}" width="1200">
 
 <br>
 <h4>  White dashes define the beta arm coordinate frame.  White circle
 indicates the expected center of the equalateral fiber triangle in beta reference frame.
 Open circles indicate expected center of fibers in beta reference frame.  X's indicate
 the found center of the fibers.</h4>
-<img src="{{ fullFigName }}" width="1200">
 
-<br>
-<img src="{{ zoomFigName }}" width="1200">
+{% for imgPath in imgList %}
+  <br>
+  <img src="{{ imgPath }}" width="1200">
+
+{% endfor %}
+
+
 {% endblock %}
 </html>

@@ -10,136 +10,420 @@ import numpy
 from scipy import signal
 import matplotlib.pyplot as plt
 import pandas as pd
-from skimage.filters import sobel
+from skimage.filters import sobel, gaussian
 from skimage.measure import regionprops, label
 import fitsio
+import scipy
 from jinja2 import Environment, PackageLoader, select_autoescape
 
 from fibermeas import config
 
-from .constants import imgScale, ferrule2Top, MICRONS_PER_MM
-from .constants import betaAxis2ferrule, templateFilePath, versionDir, vers
+from . import constants
+from .constants import ferrule2Top, MICRONS_PER_MM
+from .constants import betaAxis2ferrule, versionDir, vers
 from .constants import modelMetXY, modelBossXY, modelApXY
-from .template import rotVary, betaArmWidthVary, upsample
-from .plotutils import imshow, plotGridEval, plotSolnsOnImage, plotCircle
+# from .template import rotVary, betaArmWidthVary, upsample
+from .plotutils import imshow, plotSolnsOnImage, plotCircle
 
-t1 = time.time()
-templates = numpy.load(templateFilePath)
-print("loading templates took %.1f seconds"%(time.time()-t1))
+import seaborn as sns
 
-
-def computeAngles(centMeas):
-    met = numpy.array([centMeas["metrology"]["centroidCol"], centMeas["metrology"]["centroidRow"]])
-    ap = numpy.array([centMeas["apogee"]["centroidCol"], centMeas["apogee"]["centroidRow"]])
-    bo = numpy.array([centMeas["boss"]["centroidCol"], centMeas["boss"]["centroidRow"]])
-
-    dir1 = (bo - met)/numpy.linalg.norm(bo-met)
-    dir2 = (ap - met)/numpy.linalg.norm(ap-met)
-
-    ang = numpy.degrees(numpy.arccos(dir1.dot(dir2)))
-    print("ang1", ang)
-
-    dir1 = (met - bo)/numpy.linalg.norm(met-bo)
-    dir2 = (ap - bo)/numpy.linalg.norm(ap-bo)
-
-    ang = numpy.degrees(numpy.arccos(dir1.dot(dir2)))
-    print("ang2", ang)
-
-    dir1 = (met -ap)/numpy.linalg.norm(met-ap)
-    dir2 = (bo -ap)/numpy.linalg.norm(bo-ap)
-
-    ang = numpy.degrees(numpy.arccos(dir1.dot(dir2)))
-    print("ang3", ang)
+# for use in edge detection
+IQR_THRESH = 3  # throw out points beyond this inner quartile range
+PX_SMOOTH = 5  # pixels to smooth the original image before edge detection
 
 
-def correlateWithTemplate(image, template):
-    """Correlate an input image with a template.  Return the max response,
-    and the pixel [row, column] in the image at which the max response is seen.
-    The central pixel in the template corresponds to the ferrule center in
-    the beta arm.
+def detectFirstFallingEdge(counts, pixels, thresh, skipPix=75):
+    hitThresh = False
+    countsMeas = []
+    pixMeas = []
 
+    for ii, (_counts, pix) in enumerate(zip(counts, pixels)):
+        if ii < skipPix:
+            continue  # ignore the first few things
+        if not hitThresh and _counts < -1 * thresh:
+            hitThresh = True
+        if hitThresh:
+            if _counts < -1 * thresh:
+                countsMeas.append(_counts)
+                pixMeas.append(pix)
+            else:
+                break
+
+    if len(pixMeas) < 2:
+        # if less that two pixels form the bump this is garbage
+        return None
+
+    pixMeas = numpy.array(pixMeas)
+    countsMeas = numpy.array(countsMeas)
+
+    # invert "counts" to make positive, like a pdf should be
+    # this is because the beta arm edge is a dip in intensity
+    # rather than a bump
+    countsMeas *= -1
+
+    # compute expected pixel value and variance
+    # an empirical pdf
+    pdf = countsMeas / numpy.sum(countsMeas)
+    meanPix = numpy.sum(pdf * pixMeas)
+    varPix = numpy.sum(pdf * pixMeas**2) - meanPix**2
+    sn2 = numpy.max(countsMeas) / thresh
+    skew = numpy.sum(pdf * (pixMeas - meanPix)**2)
+
+    # plt.figure()
+    # plt.plot(pixels, counts)
+    # plt.axvspan(meanPix-varPix, meanPix+varPix, color="red", alpha=0.2)
+    # plt.axvline(meanPix, color="red")
+    # plt.xlim([meanPix-200, meanPix+200])
+    # plt.show()
+
+    return meanPix, varPix, len(pixMeas), sn2, skew
+
+
+def normalizeArr(a):
+    median = numpy.median(a)
+    iqr = scipy.stats.iqr(a)
+    a = a - median
+    return a, iqr
+
+    # print("iqr")
+    # bgCalc1 = list(imgData1[:, :350].flatten())
+    # bgCalc2 = list(imgData1[:, 1410:].flatten())
+    # bgCalc = numpy.array(bgCalc1+bgCalc2)
+    # bgMean = numpy.mean(bgCalc)
+    # bgStd = numpy.std(bgCalc)
+
+    # imgData1 = imgData1 - bgMean
+
+
+def detectBetaArmEdges(imgData):
+    """
     Parameters
-    -----------
-    image : numpy.ndarray
-        input raw image
-    template : numpy.ndarray
-        input template
+    ------------
+    imgData : numpy.ndarray
+        2D array of image data to measure
 
     Returns
     ---------
-    maxResponse : float
-        The maximum value of the correlation
-    pixel : tuple
-        [row, column] in the image where max response is seen
-        this pixel corresponds the the expected ferrule center in
-        the image
+    edgeDetections : pd.DataFrame
+        data frame containing edge detections of beta arm perimiter
+
     """
+    imgData = gaussian(imgData, PX_SMOOTH)
+    imgData = imgData / numpy.max(imgData)
 
-    image = sobel(image)
-    corr = signal.fftconvolve(image, template[::-1,::-1], mode="same")
-    maxResponse = numpy.max(corr)
-    pixel = numpy.unravel_index(numpy.argmax(corr), corr.shape)
+    xCent = []  # ccd columns, discrete or empirically determined "expected value"
+    xVar = []  # empirical variance, can have zeros, depending on scan direction
+    yCent = []  # ccd rows, discrete or empirically determened "expected value"
+    yVar = []  # emprical variance, can have zeros
+    allVar = []  # can never have zeros, basically which axis is being measured
+    npts = []  # number of pixels involved in the "gaussian" edge detection
+    direction = []  # scan direction
+    sn2 = []  # signal to noise, or something like it
+    m2 = []   # second moment about mean
 
-    plt.figure()
-    imshow(image)
+    # right-moving, left-moving, down moving **direction** (not side of arm!!!)
+    # indicating which direction the gradient is taken
+    # on the input image to detect the
+    # left, right, and top edges
+    intDirs = ["r", "l", "d"]
 
-    plt.figure()
-    imshow(template)
+    for intDir in intDirs:
+
+        if intDir == "r":
+            # dont change if moving rightward
+            grad = numpy.gradient(imgData, axis=1)
+            grad, iqr = normalizeArr(grad)
+            xPix = numpy.arange(grad.shape[-1])
+            # xPix[0] = 0 center of first pixel
+            for yPix, row in enumerate(grad):
+                output = detectFirstFallingEdge(row, xPix, iqr * IQR_THRESH)
+                if output is None:
+                    continue
+                meanX, varX, nPts, _sn2, _m2 = output
+                xCent.append(meanX)
+                yCent.append(yPix)
+                xVar.append(varX)
+                allVar.append(varX)
+                yVar.append(0)
+                direction.append(intDir)
+                npts.append(nPts)
+                sn2.append(_sn2)
+                m2.append(_m2)
+
+        elif intDir == "l":
+            # reverse columns if moving leftward
+            grad = numpy.gradient(imgData[:, ::-1], axis=1)
+            grad, iqr = normalizeArr(grad)
+            xPix = numpy.arange(grad.shape[-1])
+            xPix = xPix[::-1]
+            # xPix[-1] = 0 center of first pixel in image
+            for yPix, row in enumerate(grad):
+                output = detectFirstFallingEdge(row, xPix, iqr * IQR_THRESH)
+                if output is None:
+                    continue
+                meanX, varX, nPts, _sn2, _m2 = output
+                xCent.append(meanX)
+                yCent.append(yPix)
+                xVar.append(varX)
+                allVar.append(varX)
+                yVar.append(0)
+                direction.append(intDir)
+                npts.append(nPts)
+                sn2.append(_sn2)
+                m2.append(_m2)
+
+        elif intDir == "d":
+            # transpose and reverse columns if moving downward
+            grad = numpy.gradient(imgData.T[:, ::-1], axis=1)
+            grad, iqr = normalizeArr(grad)
+            yPix = numpy.arange(grad.shape[-1])
+            yPix = yPix[::-1]
+            # xPix[-1] = 0 center of first pixel in image
+            for xPix, col in enumerate(grad):
+                # print("xPix", xPix)
+                output = detectFirstFallingEdge(col, yPix, iqr * IQR_THRESH)
+                if output is None:
+                    continue
+                meanY, varY, nPts, _sn2, _m2 = output
+                xCent.append(xPix)
+                yCent.append(meanY)
+                xVar.append(0)
+                yVar.append(varY)
+                allVar.append(varY)
+                direction.append(intDir)
+                npts.append(nPts)
+                sn2.append(_sn2)
+                m2.append(_m2)
+
+    dd = {}
+    dd["xCent"] = xCent
+    dd["yCent"] = yCent
+    dd["xVar"] = xVar
+    dd["yVar"] = yVar
+    dd["npts"] = npts
+    dd["direction"] = direction
+    dd["allVar"] = allVar
+    dd["sn2"] = sn2
+    dd["m2"] = m2
+
+    df = pd.DataFrame(dd)
+
+    return df
 
 
-    plt.figure()
-    imshow(corr)
-    plotCircle(pixel[1], pixel[0], r=5)
-    plt.show()
-
-    return maxResponse, pixel
-
-
-def doOne(x):
-    """For use in multiprocessing.  Correlate an image with a template
+def solveBetaFrameOrientation(edgeDetections, imgScale):
+    """
+    Given the detected edges of the beta arm, infer the
+    orientation with respect to the CCD rows and columns
 
     Parameters
     ------------
-    x : list of [int, int, numpy.ndarray]
-        [index for rotation, index for beta arm width, image to correlate]
-
-    Returns
-    ----------
-    outputList : list
-        1 or 2 element list, containing response for + and - rotation.
-        Each list element contains 5 items:
-            rot : float
-                rotation of template
-            betaArmWidth : float
-                beta arm width of template
-            maxResponse : float
-                the maximum respose seen in the correlation
-            row : int
-                row in image where max response seen
-            col : int
-                column in image where max response seen
+    edgeDetections : pd.DataFrame
+        output from `.detectBetaArmEdges`
     """
-    iRot = x[0]
-    jBaw = x[1]
-    refImg = x[2]
+    df = edgeDetections
 
-    # outputList = []
+    # estimate beta arm width
+    # and for each CCD row
+    baw = []  # beta arm width
+    bawVar = []  # variance of beta arm width
+    yCent = []  # ccd row "centroid" of center line of beta arm
+    bawCenX = []  # ccd column "centroid" of center line  of beta arm
+    bawCenXVar = []  # estimated variance of ccd column of beta arm
 
-    rot = rotVary[iRot]
-    betaArmWidth = betaArmWidthVary[jBaw]
+    # find ccd rows with both l and r detections, ignore the rest
+    yPixelsL = set(df[df.direction == "l"].yCent)
+    yPixelsR = set(df[df.direction == "r"].yCent)
+    yPixels = yPixelsL.intersection(yPixelsR)
+    yPixels = numpy.array(list(yPixels))
 
-    tempImg = templates[iRot,jBaw,:,:]
-    maxResponse, [argRow, argCol] = correlateWithTemplate(refImg, tempImg)
+    for yPixel in yPixels:
+        # measure the ccd column center location of the beta arm
+        # as a function of ccd row
+        lr = df[df.yCent == yPixel]
+        r = lr[lr.direction == "r"]
+        l = lr[lr.direction == "l"]
+        _baw = float(l.xCent) - float(r.xCent)
+        _bawVar = float(r.xVar) + float(l.xVar)
+        _bawCenX = 0.5 * (float(r.xCent) + float(l.xCent))
+        _bawCenXVar = 0.5**2 * float(_bawVar)
 
-    # outputList.append([rot, betaArmWidth, maxResponse, argRow, argCol])
+        baw.append(_baw)
+        bawVar.append(_bawVar)
+        bawCenX.append(_bawCenX)
+        bawCenXVar.append(_bawCenXVar)
+        yCent.append(yPixel)
 
-    # now correlate negative rotation (flip image about y axis)
-    # if rot != 0:
-    #     tempImg = tempImg[:,::-1]
-    #     maxResponse, [argRow, argCol] = correlateWithTemplate(refImg, tempImg)
-    #     outputList.append([-1*rot, betaArmWidth, maxResponse, argRow, argCol])
+    betaMeasX = {}
+    betaMeasX["baw"] = baw
+    betaMeasX["bawVar"] = bawVar
+    betaMeasX["yCent"] = yCent
+    betaMeasX["bawCenX"] = bawCenX  # x pixel center of beta arm
+    betaMeasX["bawCenXVar"] = bawCenXVar  # estimated variance of center location
 
-    return rot, betaArmWidth, maxResponse, argRow, argCol
+    betaMeasX = pd.DataFrame(betaMeasX)
+
+    plt.figure()
+    sns.lineplot(x="yCent", y="baw", data=betaMeasX, color="blue")
+
+    # keep data in the innerquartile range based on beta arm width
+
+    plCut = numpy.percentile(betaMeasX.baw, 40) # effectively cuts out tip curve
+    # puCut = numpy.percentile(betaMeasX.baw, 99.5)
+    betaMeasXClip = betaMeasX[betaMeasX.baw > plCut]
+
+    bawMeasMM = numpy.median(betaMeasXClip.baw) * imgScale / MICRONS_PER_MM
+
+    # betaMeasX = betaMeasX[betaMeasX.baw < puCut]
+
+    sns.lineplot(x="yCent", y="baw", data=betaMeasXClip, color="red")
+    plt.xlabel("CCD row")
+    plt.ylabel("beta arm width (pixel)")
+
+    print("len", len(betaMeasXClip))
+
+    # plt.figure()
+    # sns.lineplot(x="yCent", y="baw", data=betaMeasXClip)
+
+    # realWidths = numpy.array(betaMeasXClip.baw)*imgScale / 1000 # in mm
+    # print("median width", numpy.median(realWidths), numpy.mean(realWidths))
+
+    # minWidth = numpy.min(realWidths)
+    # maxWidth = numpy.max(realWidths)
+    # bins = numpy.arange(minWidth,maxWidth,0.005) # 5 micron spacing
+    # plt.figure()
+    # plt.hist(realWidths, bins=bins)
+    # plt.title("baw")
+
+    ctrLine = numpy.array(betaMeasXClip.bawCenX)
+    ctrErr = numpy.sqrt(betaMeasXClip.bawCenXVar)
+    ys = numpy.array(betaMeasXClip.yCent)
+
+    # import pdb; pdb.set_trace()
+
+    plt.figure()
+    plt.errorbar(ctrLine, ys, xerr=ctrErr)
+    # plt.ylim([0, imgData1.shape[1]])
+    # plt.plot(ys, ctrLine, '.')
+    # plt.xlim([200,600])
+    # plt.show()
+
+    # linear fit x as a function of y (chi2 min)
+    # hogg paper data analysis recipes
+    # Ax = b
+    nPts = len(ctrLine)
+    Cinv = numpy.diag(1 / ctrErr)
+    Y = ctrLine
+    A = numpy.ones((nPts,2))
+    A[:, 1] = ys
+
+    (xIntercept,xSlope), resid, rank, s = numpy.linalg.lstsq(A, Y)
+    fitX = xIntercept + xSlope * ys
+
+    plt.plot(fitX, ys, '--', color="red")
+    plt.xlabel("CCD col")
+    plt.ylabel("CCD row")
+    plt.title("beta arm midline")
+
+    # this takes into account sigmas for measurement
+    # (b2,m2), resid, rank, s = numpy.linalg.lstsq(
+    #     A.T @ Cinv @ A,
+    #     A.T @ Cinv @Y
+    # )
+
+    # fitX2 = b2 + m2 * ys
+    # plt.plot(ys, fitX2, '--', color="black")
+
+    # import pdb; pdb.set_trace()
+    # plt.show()
+
+    # plot 2nd derivative
+    # d1 = numpy.gradient(betaMeasX.baw)
+    # d2 = numpy.gradient(d1)
+    # plt.figure()
+    # plt.plot(ys, d1)
+
+    # print(b-b2, m/m2)
+
+    # import pdb; pdb.set_trace()
+
+    # project "down" measurements onto this line
+    dfDown = df[df.direction == "d"]
+    # move from y, x to x, y
+    # yIntercept = -1*b/m
+    # ySlope = 1/m
+
+    # plt.figure()
+    # sns.scatterplot(x="xCent", y="yCent", data=dfDown)
+    # plt.show()
+
+    # shift x data by xIntercept, such that
+    # beta arm midline passes through origin
+    xs = numpy.array(dfDown.xCent) - xIntercept
+    ys = numpy.array(dfDown.yCent)
+
+    xys = numpy.array([xs, ys])
+
+    # rotate data normal to fit direction of beta arm midline
+    ang = numpy.pi/2 - numpy.arctan2(1 / xSlope, 1)
+
+    rotMat = numpy.array([
+        [numpy.cos(ang), -numpy.sin(ang)],
+        [numpy.sin(ang), numpy.cos(ang)]
+    ])
+
+    invRotMat = numpy.array([
+        [numpy.cos(-ang), -numpy.sin(-ang)],
+        [numpy.sin(-ang), numpy.cos(-ang)]
+    ])
+
+    xyRot = rotMat.dot(xys)
+
+    # plt.figure()
+    # plt.plot(xys[0,:], xys[1,:])
+    # plt.title("no rot")
+
+    # plt.figure()
+    # plt.plot(xyRot[0,:], xyRot[1,:])
+    # plt.title("Top Edge Detections")
+
+    # find the "flat spot" on the beta arm tip
+    nomRadMM = constants.betaArmWidth/2 - constants.betaArmRadius
+    nomRadPx = nomRadMM * MICRONS_PER_MM / imgScale
+
+    keep = numpy.abs(xyRot[0,:]) < nomRadPx
+    xyRotClip = xyRot[:, keep]
+
+    # plt.plot(xyRotClip[0, :], xyRotClip[1, :], color="red", label="used detections")
+    # plt.xlabel("x value (rotated pixels)")
+    # plt.ylabel("y value (rotated pixels)")
+    # plt.legend()
+
+    yArmTop = numpy.median(xyRotClip[1])
+    yFerruleCen = yArmTop - ferrule2Top * MICRONS_PER_MM / imgScale
+    xFerruleCen = 0
+
+    # plt.figure()
+    # plt.hist(xyRotClip[1], bins=15)
+    # plt.axvline(yArmTop, color='red')
+    # # plt.xlim([915, 930])
+    # # plt.ylim([0,125])
+    # plt.title("top edge detect\nnpts=%i"%len(xyRotClip[1]))
+    # plt.xlabel("y value (rotated pixels)")
+
+    # rotate back into ccdFrame
+    ferruleCenCol, ferruleCenRow = invRotMat.dot([xFerruleCen, yFerruleCen])
+    ferruleCenCol += xIntercept
+
+    results = {}
+    results["rot"] = numpy.degrees(ang)  # CW rotation of image wrt beta arm
+    results["betaArmWidthMM"] = bawMeasMM  # mm
+    results["ferruleCenRow"] = ferruleCenRow
+    results["ferruleCenCol"] = ferruleCenCol
+    results["xIntercept"] = xIntercept
+    results["xSlope"] = xSlope
+
+    return results, betaMeasX, betaMeasXClip, xyRot, xyRotClip
 
 
 def identifyFibers(imgData):
@@ -162,7 +446,7 @@ def identifyFibers(imgData):
     # might be useful to try?
     # https://stackoverflow.com/questions/31705355/how-to-detect-circlular-region-in-images-and-centre-it-with-python
 
-    thresh = (imgData > numpy.percentile(imgData, 95))
+    thresh = (imgData > numpy.percentile(imgData, 95)) # was 95
     labels = label(thresh)
     props = regionprops(labels, imgData)
 
@@ -231,12 +515,10 @@ def identifyFibers(imgData):
     return fiberDict
 
 
-def processImage(imageFile, invertRow=False, invertCol=False):
+def processImage(imageFile, invertRow=True, invertCol=True):
     """Measure the locations of fibers in the beta arm reference frame.
     Raw measurement data are put in a new directory:
     config["outputDirectory"]/imageFile/
-
-    The two files written are fiberMeas.json and templateGridEval.csv
 
     Parameters:
     ------------
@@ -244,7 +526,7 @@ def processImage(imageFile, invertRow=False, invertCol=False):
         path to FITS file to analyze
     """
     imgBaseName = os.path.basename(imageFile)
-    imgName = imgBaseName.strip(".fits").strip(".FITS")
+    imgName = imgBaseName.split(".")[0]
 
     measDir = os.path.join(
         versionDir,
@@ -260,11 +542,20 @@ def processImage(imageFile, invertRow=False, invertCol=False):
     # copy image to the meas directory
     shutil.copy(imageFile, os.path.join(measDir, imgBaseName))
 
+    imgHeader = fitsio.read_header(imageFile)
+    imgScale = imgHeader["PIXSCALE"]
+    scaleErr = imgHeader["SCALEERR"]
+    robotID = imgHeader["FPUNAME"]
+    tailID = imgHeader["ROBOTAIL"]
+    exptime = imgHeader["EXPTIME"]
+    operator = imgHeader["OPERATOR"]
+    date = imgHeader["DATE-OBS"]
+
     data = fitsio.read(imageFile)
     if invertRow:
-        data = data[::-1,:]
+        data = data[::-1, :]
     if invertCol:
-        data = data[:,::-1]
+        data = data[:, ::-1]
     # normalize data
     data = data / numpy.max(data)
     # first identify fiber locations in the image
@@ -273,104 +564,150 @@ def processImage(imageFile, invertRow=False, invertCol=False):
     # imshow(sobel(data))
     # plt.show()
 
-    fiberMeas = identifyFibers(data)
+    fiberMeasDict = identifyFibers(data)
 
     # write fiber regions as a json file
     fiberMeasFile = os.path.join(measDir, "centroidMeas_%s_%s.json"%(imgName, vers))
     with open(fiberMeasFile, "w") as f:
-        json.dump(fiberMeas, f, indent=4)
-
-    # correlate with beta arm templates to find origin of
-    # beta arm coordinate system in the image frame
-    indList = []
-    for ii, imgRot in enumerate(rotVary):
-        for jj, dBAW in enumerate(betaArmWidthVary):
-            indList.append([ii,jj,data])
-            doOne(indList[-1])
+        json.dump(fiberMeasDict, f, indent=4)
 
 
-    # pool = Pool(config["useCores"])
-    # t1 = time.time()
-    # out = numpy.array(pool.map(doOne, indList))
-    # print("took %2.f mins"%((time.time()-t1)/60.))
-    # pool.close()
+    # find edges and thus directions of the beta arm
+    # coordinate system
+    edgeDetections = detectBetaArmEdges(data)
 
+    # write edge detections to file
+    outFile = os.path.join(measDir, "edgeDetections_%s_%s.csv"%(imgName, vers))
+    edgeDetections.to_csv(outFile)
 
-    # flatten the output list to pack into a table
-    # out = list(itertools.chain(*out))
+    betaOrient = solveBetaFrameOrientation(edgeDetections, imgScale)
 
-    maxCorr = pd.DataFrame(out, columns=["rot", "betaArmWidth", "maxCorr", "argRow", "argCol"])
-    # write this as an output
-    outFile = os.path.join(measDir, "templateGridEval_%s_%s.csv"%(imgName, vers))
-    maxCorr.to_csv(outFile)
+    results, betaMeasX, betaMeasXClip, xyRot, xyRotClip = betaOrient
 
+    outFile = os.path.join(measDir, "results_%s_%s.csv"%(imgName, vers))
+    with open(outFile, "w") as f:
+        json.dump(results, f, indent=4)
 
-def solveImage(imageFile, invertRow=False, invertCol=False):
-    """Use the files output by processImage to determine the fiber coordinates
-    in the beta arm coordinate system.  Various output files are written to:
-    config["outputDirectory"]/imageFile/
+    outFile = os.path.join(measDir, "betaMeasX_%s_%s.csv"%(imgName, vers))
+    betaMeasX.to_csv(outFile)
 
-    note: processImage must be run first!!! this routine expects outputs
-    from that one.
+    outFile = os.path.join(measDir, "betaMeasXClip_%s_%s.csv"%(imgName, vers))
+    betaMeasXClip.to_csv(outFile)
 
-    Parameters:
-    ------------
-    imageFile : str
-        path to FITS file to analyze
-    """
-    imgBaseName = os.path.basename(imageFile)
-    imgName = imgBaseName.strip(".fits").strip(".FITS")
+    outFile = os.path.join(measDir, "xyRot_%s_%s.csv"%(imgName, vers))
+    numpy.savetxt(outFile, xyRot)
 
-    measDir = os.path.join(
-        versionDir,
-        imgName
+    outFile = os.path.join(measDir, "xyRotClip_%s_%s.csv"%(imgName, vers))
+    numpy.savetxt(outFile, xyRotClip)
+
+    ##### generate plots #####
+
+    imgList = plotSolnsOnImage(
+        data, results["rot"], results["betaArmWidthMM"],
+        results["ferruleCenRow"], results["ferruleCenCol"],
+        fiberMeasDict, measDir, imgName, imgScale
     )
 
-    # load the csv with template grid evaluations
-    path2tempEval = os.path.join(measDir, "templateGridEval_%s_%s.csv"%(imgName, vers))
-    tempEval = pd.read_csv(path2tempEval, index_col=0)
-    tempEvalFigName = os.path.join(measDir, "templateGridEval_%s_%s.png"%(imgName, vers))
-    plotGridEval(tempEval, tempEvalFigName)
+    imgList = list(imgList)
 
-    # find max response
-    amax = tempEval["maxCorr"].idxmax() # where is the correlation maximized?
-    argMaxSol = tempEval.iloc[amax]
-    betaArmWidth = argMaxSol["betaArmWidth"]
-    rot = argMaxSol["rot"]
-    ferruleCenRow = argMaxSol["argRow"]
-    ferruleCenCol = argMaxSol["argCol"]
-    maxCorr = argMaxSol["maxCorr"]
 
-    # overplot solutions on original image
-    fiberMeasFile = os.path.join(measDir, "centroidMeas_%s_%s.json"%(imgName, vers))
-    with open(fiberMeasFile, "r") as f:
-        fiberMeasDict = json.load(f)
+    # plot all edge detections
+    figName = os.path.join(measDir, "allEdges_%s_%s.png"%(imgName, vers))
+    plt.figure()
+    xs = edgeDetections.xCent.to_numpy()
+    ys = edgeDetections.yCent.to_numpy()
+    plt.plot(xs, ys, '.k')
+    plt.xlabel("CCD col")
+    plt.ylabel("CCD row")
+    plt.axis("equal")
+    plt.title("All edge detections\nleft scan, right scan, down scan")
+    plt.savefig(figName, dpi=350)
+    imgList.append(figName)
 
-    # computeAngles(fiberMeasDict)
+    # plot beta arm width as a function of ccd y
+    figName = os.path.join(measDir, "baw_%s_%s.png"%(imgName, vers))
+    plt.figure()
+    ys = betaMeasX.baw.to_numpy()
+    xs = betaMeasX.yCent.to_numpy()
+    plt.plot(xs, ys, '-k')
+    plt.xlabel("CCD row")
+    plt.ylabel("beta arm width (px)")
 
-    imgData = fitsio.read(imageFile)
-    if invertRow:
-        imgData = imgData[::-1,:]
-    if invertCol:
-        imgData = imgData[:,::-1]
+    ys = betaMeasXClip.baw.to_numpy()
+    xs = betaMeasXClip.yCent.to_numpy()
+    plt.plot(xs, ys, '-r', label="used (flat regime)")
+    plt.legend()
+    plt.title("L R edge separation")
+    plt.savefig(figName, dpi=350)
+    imgList.append(figName)
 
-    fullFigName, zoomFigName = plotSolnsOnImage(
-        imgData, rot, betaArmWidth, ferruleCenRow, ferruleCenCol,
-        fiberMeasDict, measDir, imgName
-    )
+    # beta center line
+    figName = os.path.join(measDir, "baCenterFit_%s_%s.png"%(imgName, vers))
+    plt.figure()
+
+    # plot beta center line
+
+    ctrLine = numpy.array(betaMeasXClip.bawCenX)
+    ctrErr = numpy.sqrt(betaMeasXClip.bawCenXVar)
+    ys = numpy.array(betaMeasXClip.yCent)
+    plt.errorbar(ctrLine, ys, xerr=ctrErr)
+
+    fitX = results["xIntercept"] + results["xSlope"] * ys
+
+    plt.plot(fitX, ys, '--', color="red", label="beta centerline fit")
+    plt.xlabel("CCD col (px)")
+    plt.ylabel("CCD row (px)")
+    plt.title("beta arm midline")
+    plt.legend()
+
+    plt.savefig(figName, dpi=350)
+    imgList.append(figName)
+
+
+    # plot rotated top edge detections
+    figName = os.path.join(measDir, "topEdge_%s_%s.png"%(imgName, vers))
+    plt.figure()
+    plt.plot(xyRot[0,:], xyRot[1,:], color="black")
+    plt.axis("equal")
+    plt.title("Top Edge Detections\n(down scan)")
+
+    plt.plot(xyRotClip[0, :], xyRotClip[1, :], color="red", label="used (flat regime)")
+    plt.xlabel("x (rotated pixels)")
+    plt.ylabel("y (rotated pixels)")
+    plt.legend()
+    plt.savefig(figName, dpi=350)
+    imgList.append(figName)
+
+    figName = os.path.join(measDir, "topEdgeHist_%s_%s.png"%(imgName, vers))
+    topEdge = numpy.median(xyRotClip[1])
+    ndetect = len(xyRotClip[1])
+    plt.figure()
+    plt.hist(xyRotClip[1, :])
+    plt.axvline(topEdge, color="red", label="median")
+    plt.xlabel("y (rotated pixels)")
+    plt.title("top edge of beta arm\n nPts=%i"%ndetect)
+    plt.legend()
+    plt.savefig(figName, dpi=350)
+    imgList.append(figName)
+
+    # plt.show()
+
+
+    # solve for beta arm coordinates of fibers and summarize everything
 
     # put centroid info in beta arm frame (mm)
     # unrotate (to put beta arm +x along image +y),
     # remember beta arm +x points from beta axis toward fibers,
     # along centerline of beta arm
-    imgRot = numpy.radians(-1*rot)
+    imgRot = numpy.radians(-1* results["rot"])
     rotMat = numpy.array([
         [numpy.cos(imgRot), numpy.sin(imgRot)],
         [-numpy.sin(imgRot), numpy.cos(imgRot)]
     ])
 
     # center of rotation is the "nominal location" of the ferrule's center
-    centRot = numpy.array([ferruleCenCol, ferruleCenRow])
+    centRot = numpy.array([results["ferruleCenCol"], results["ferruleCenRow"]])
+
     ccdMetXY = [
         fiberMeasDict["metrology"]["centroidCol"],
         fiberMeasDict["metrology"]["centroidRow"]
@@ -431,27 +768,27 @@ def solveImage(imageFile, invertRow=False, invertCol=False):
     # compute errors
     # vector points from measured location to expected
     # location in beta arm frame, units are microns
-    metErr = (modelMetXY - metXY)*MICRONS_PER_MM
-    apErr = (modelApXY - apXY)*MICRONS_PER_MM
-    boErr = (modelBossXY - boXY)*MICRONS_PER_MM
+    metErr = (modelMetXY - metXY) * MICRONS_PER_MM
+    apErr = (modelApXY - apXY) * MICRONS_PER_MM
+    boErr = (modelBossXY - boXY) * MICRONS_PER_MM
     # print("metErr", metErr, numpy.linalg.norm(metErr))
     # print("apErr", apErr, numpy.linalg.norm(apErr))
     # print("boErr", boErr, numpy.linalg.norm(boErr))
 
     # compile results
     solns = {}
-    solns["ccdRot"] = rot  # angle (deg) from beta arm +x to ccd +y (CCW)
-    solns["betaArmWidthMM"] = betaArmWidth  # best fit beta arm width (mm)
+    solns["ccdRot"] = results["rot"]  # angle (deg) from beta arm +x to ccd +y (CCW)
+    solns["betaArmWidthMM"] = results["betaArmWidthMM"]  # best fit beta arm width (mm)
     # CCD col for expected center of ferrule
     # correlation returns the best pixel (not fractional!)
     # but error cannot be larger than 0.5 pixels or ~1 micron so
     # whatever
-    solns["ferruleCenCCD"] = [ferruleCenCol, ferruleCenRow]
+    solns["ferruleCenCCD"] = [results["ferruleCenCol"], results["ferruleCenRow"]]
     solns["imgFile"] = imageFile
     solns["imgName"] = imgName
     solns["imgScale"] = imgScale  # microns per pixel
+    solns["imgScaleErr"] = scaleErr
     solns["version"] = vers  # software version
-    solns["maxCorr"] = maxCorr  # correlation strength
     solns["measDate"] = datetime.datetime.now().isoformat()
 
     # centroids of pixels in original image
@@ -486,15 +823,13 @@ def solveImage(imageFile, invertRow=False, invertCol=False):
     solns["apogeeErrMagUm"] = numpy.linalg.norm(apErr)
 
     # paths to plots
-    solns["tempEvalFigName"] = tempEvalFigName
-    solns["fullFigName"] = fullFigName
-    solns["zoomFigName"] = zoomFigName
+    solns["imgList"] = imgList
 
-    # tbt
-    solns["robotID"] = "N/A"
-    solns["expTime"] = "N/A"
-    solns["expDate"] = "N/A"
-    solns["roboTailID"] = "N/A"
+    solns["robotID"] = robotID
+    solns["expTime"] = exptime
+    solns["expDate"] = date
+    solns["roboTailID"] = tailID
+    solns["operator"] = operator
 
     summaryFile = os.path.join(measDir, "summary_%s_%s.json"%(imgName, vers))
     with open(summaryFile, "w") as f:
@@ -512,8 +847,4 @@ def solveImage(imageFile, invertRow=False, invertCol=False):
     summaryPath = os.path.join(measDir, "summary_%s_%s.html"%(imgName, vers))
     with open(summaryPath, "w") as f:
         f.write(output)
-
-
-if __name__ == "__main__":
-    pass
 
