@@ -169,16 +169,13 @@ def plotSolnsOnImage(
         plt.plot(x,y, "x", markersize=4, color="red")
         plotCircle(x,y,r, linestyle=":")
 
-
     # save full figure
     fullFigName = os.path.join(measDir, "fullSoln_%s_%s.png"%(imageName, vers))
     zoomFigName = os.path.join(measDir, "zoomSoln_%s_%s.png"%(imageName, vers))
     plt.savefig(fullFigName, dpi=350)
 
-
     plt.xlim([ferruleCenCol-200, ferruleCenCol+200])
     plt.ylim([ferruleCenRow-200, ferruleCenRow+134])
-
 
     plt.savefig(zoomFigName, dpi=350)
 
@@ -204,8 +201,6 @@ def plotSolnsOnImage(
                 figName = os.path.join(measDir, "%s_%s_%s.png"%(fiberID, imageName, vers))
             plt.savefig(figName, dpi=350)
             figNames.append(figName)
-
-    plt.close()
 
     allFigNames = [fullFigName, zoomFigName] + figNames
 
