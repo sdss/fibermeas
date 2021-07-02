@@ -6,7 +6,7 @@ from skimage.morphology import erosion, white_tophat, black_tophat
 from skimage.morphology import disk
 from skimage.measure import regionprops, label
 from fibermeas.plotutils import plotCircle
-from fibermeas.fibermeas import detectBetaArmEdges
+# from fibermeas.fibermeas import detectBetaArmEdges
 import glob
 from skimage.restoration import denoise_wavelet, estimate_sigma
 from skimage.util import invert
@@ -20,6 +20,7 @@ import os
 import shutil
 
 MicronPerMM = 1000
+IMG_SCALE_GUESS = 3.62
 
 
 class BetaImgModel(object):
@@ -42,6 +43,7 @@ class BetaImgModel(object):
         self.imgScale = imgScale # micron per pixel
         self.medianL = medianL  # in rotated frame px
         self.medianR = medianR  # in rotated frame px
+        # print("beta arm width mm", (medianR-medianL)*imgScale/1000.)
         self.midX = numpy.mean([medianL, medianR]) # in rotated frame px
         self.imgRotRad = numpy.arctan(m) # positive means CCD is rotated CW wrt beta arm
         self.imgRotDeg = numpy.degrees(self.imgRotRad)
@@ -131,10 +133,15 @@ class BetaImgModel(object):
 class MeasureImage(object):
 
     def __init__(self, litImageFileName, darkImageFileName, outputDir):
-        self.basename = "_"+litImageFileName.split("_")[1]  #PXXXXX
+        # self.basename = litImageFileName.split("_")[1]  #PXXXXX
+        junk, filename = os.path.split(litImageFileName)
+        self.basename = filename.split("_")[1]
+        basedir = os.path.dirname(litImageFileName)
+        junk, self.basedir = os.path.split(basedir)
         self.litFile = litImageFileName
         self.darkFile = darkImageFileName
         self.outputDir = outputDir
+        self.pltTitle = "%s %s"%(self.basedir, self.basename)
 
         # read and rotate images 180 degrees for my sanity
         self.litData = fitsio.read(litImageFileName)[::-1, ::-1]
@@ -145,8 +152,10 @@ class MeasureImage(object):
         # lit vs dark are mostly used for only centroid fibers
         # by difference imaging, but probably just wanna fit one
         # image
-        self.mainData = self.darkData
-        self.mainHeader = self.darkHeader
+        # self.mainData = self.darkData
+        # self.mainHeader = self.darkHeader
+        self.mainData = self.litData
+        self.mainHeader = self.litHeader
 
         # None's below populated by detectEdges method
         # dataframe with x,y pixels for edge detections from
@@ -181,17 +190,18 @@ class MeasureImage(object):
         self.detectEdges()
         self.fitBetaFrame()
 
-        self.plotList.append(self.plotTopFits())
-        self.plotList.append(self.plotLRfits())
         self.plotList.append(self.plotRaw())
         self.plotList.extend(self.plotGradMarginals())
+        self.plotList.append(self.plotTopFits())
+        self.plotList.append(self.plotLRfits())
         self.plotList.append(self.plotEdgeDetections())
         self.plotList.extend(self.plotFinalSolution())
         # print(out)
 
     def plotFinalSolution(self):
-        plt.figure(figsize=(13,8))
-        plt.imshow(exposure.equalize_hist(self.darkData), origin="lower", cmap="bone")
+        fig = plt.figure(figsize=(13,8))
+        fig.suptitle(self.pltTitle)
+        plt.imshow(exposure.equalize_hist(self.mainData), origin="lower", cmap="bone")
 
         # plot outlines of beta frame, draw them in rotated frame
         midL = self.imgModel.medianL
@@ -261,8 +271,6 @@ class MeasureImage(object):
 
         return filenames
 
-
-
     def plotRaw(self):
         ldata = self.litData
         ddata = self.darkData
@@ -271,39 +279,64 @@ class MeasureImage(object):
         # fitsio.write("diff.fits", nData)
         # fitsio.write("eq.fits", exposure.equalize_hist(nData))
         # fitsio.write("eq2.fits", exposure.equalize_hist(ddata))
-        fig, (ax1, ax2, ax3) = plt.subplots(3,1, figsize=(4,8))
-        ax1.imshow(ldata, origin="lower")
-        ax2.imshow(ddata, origin="lower")
-        ax3.imshow(nData, origin="lower")
+        fig, axs = plt.subplots(2,3, figsize=(13,6))
+
+        axs = axs.flatten()
+        fig.suptitle(self.pltTitle)
+        fig.suptitle(self.pltTitle)
+        axs[0].imshow(ldata, origin="lower", cmap="bone")
+        axs[0].set_ylabel("raw")
+        axs[1].imshow(ddata, origin="lower", cmap="bone")
+        axs[2].imshow(nData, origin="lower", cmap="bone")
+
+        axs[3].imshow(exposure.equalize_hist(ldata), origin="lower", cmap="bone")
+        axs[3].set_ylabel("hist scaled")
+        axs[4].imshow(exposure.equalize_hist(ddata), origin="lower", cmap="bone")
+        axs[5].imshow(exposure.equalize_hist(nData), origin="lower", cmap="bone")
+
+        for ax in axs:
+            ax.axes.xaxis.set_ticks([])
+            ax.axes.yaxis.set_ticks([])
         filename = os.path.join(self.outputDir, "%s_raw.png"%self.basename)
-        plt.savefig(filename, dpi=350)
+        plt.tight_layout()
+        plt.savefig(filename, dpi=450)
         plt.close()
         return filename
 
     def findFibers(self):
         ################### arbitrary choices ###############
         erosionSize = 4  # pixels
-        thresh = 99.7  # percentile
+        thresh = 99  # percentile
         ###################################################
 
         ldata = self.litData
         ddata = self.darkData
         nData = ldata-ddata  # difference image for finding fibers
 
-
         selem = disk(erosionSize)
         threshImg = nData > numpy.percentile(nData, thresh)
         eroded = erosion(threshImg, selem)
 
+        # plt.imshow(eroded, origin="lower")
+        # plt.show()
 
         # find regions
         labels = label(eroded)
-        props = regionprops(labels, nData)
+        props = regionprops(labels, ldata)#nData)
 
         centroid = []
         for prop in props:
             cr, cc = prop.weighted_centroid
-            centroid.append([cc, cr, prop.equivalent_diameter, prop.eccentricity])
+            if prop.equivalent_diameter < 25:
+                # fiber dia is at least 25 pixels
+                continue
+            out = [cc, cr, prop.equivalent_diameter, prop.eccentricity]
+            # print(out)
+            centroid.append(out)
+
+        # import pdb; pdb.set_trace()
+
+        assert len(centroid) == 3
 
         centroid = numpy.array(centroid)
         # sort by column (x)
@@ -332,12 +365,12 @@ class MeasureImage(object):
         gradientSmoothPx = 8
         # for determining baselines above which to find a detection, these are
         # from the edge of the chip inward, where it's just noise and such
-        backgroundPxRange = 100
+        backgroundPxRange = 35
         # how many stds above mean background to declare a "detection"
         # for left right gradient
         LRstdDetect = 4
         # how many stds above mean background to declare a "detection" for top
-        TstdDetect = 2
+        TstdDetect = 4
         # how many pixels to grow the left, right, and top edge detections for
         # narrowing line by line detections of arm edge, ignoring everything
         # outside
@@ -475,6 +508,7 @@ class MeasureImage(object):
         # first plot gradient along rows
         grad = self.horizGrad
         fig, (ax1, ax2) = plt.subplots(2,1, figsize=(6,8))
+        fig.suptitle(self.pltTitle)
         ax1.imshow(grad, origin="lower")
         ax1.set_title("%s Left-Right Smoothed Gradient"%self.basename)
         for line in grad:
@@ -492,6 +526,7 @@ class MeasureImage(object):
         # next plot gradient along cols
         grad = self.vertGrad
         fig, (ax1, ax2) = plt.subplots(1,2, figsize=(13,4))
+        fig.suptitle(self.pltTitle)
         ax1.imshow(grad, origin="lower")
         ax1.set_title("%s Up-Down Smoothed Gradient"%self.basename)
         for line in grad.T: # traspose to iterate over columns
@@ -506,7 +541,8 @@ class MeasureImage(object):
         return [filename1, filename2]
 
     def plotEdgeDetections(self):
-        plt.figure(figsize=(13,8))
+        fig = plt.figure(figsize=(13,8))
+        fig.suptitle(self.pltTitle)
         plt.imshow(self.mainData, origin="lower", cmap="bone")
         ax = plt.gca()
         cb = ax.scatter(
@@ -529,7 +565,7 @@ class MeasureImage(object):
         # to use for line fitting
         # 1.5 is found by inspection to get most of the top flat
         topWidthMicron = 0.6 * MicronPerMM * 1.8
-        topWidthPx = topWidthMicron / self.mainHeader["PIXSCALE"]
+        topWidthPx = topWidthMicron / IMG_SCALE_GUESS # self.mainHeader["PIXSCALE"]
         # prom threshold is the minimum signal to declare a valid detectoin
         promThresh = 0.0002
         ####################################################
@@ -566,7 +602,7 @@ class MeasureImage(object):
         # for finding the left and right edges
         # top is 1.3 mm below the top of the beta arm
         # bottom is 2*1.3 mm below the top of the beta arm
-        topThresh = -1.3*MicronPerMM / self.mainHeader["PIXSCALE"]
+        topThresh = -1.3*MicronPerMM / IMG_SCALE_GUESS # self.mainHeader["PIXSCALE"]
         bottomThresh = 2*topThresh
         ###############################################
 
@@ -632,7 +668,8 @@ class MeasureImage(object):
         return medianL, medianR
 
     def plotTopFits(self):
-        plt.figure()
+        fig = plt.figure()
+        fig.suptitle(self.pltTitle)
         dfTop = self.edgeDetections[self.edgeDetections.side=="top"]
         plt.plot(dfTop.col, dfTop.row, '.', color="tab:orange")
         plt.plot(self.topEdgeSelection.col, self.topEdgeSelection.row, '.', color="tab:blue", alpha=0.5)
@@ -650,7 +687,7 @@ class MeasureImage(object):
     def fitBetaFrame(self):
         b, m = self._fitTop()
         medianL, medianR = self._fitEdges(b, m)
-        self.imgModel = BetaImgModel(b, m, medianL, medianR, self.mainHeader["PIXSCALE"])
+        self.imgModel = BetaImgModel(b, m, medianL, medianR, IMG_SCALE_GUESS) #self.mainHeader["PIXSCALE"])
 
     def plotLRfits(self):
         lEdge = self.leftEdgeSelection[["col", "row"]].to_numpy()
@@ -665,6 +702,7 @@ class MeasureImage(object):
         rightBins = numpy.arange(rsorted[0], rsorted[-1])
 
         fig, axs = plt.subplots(2,2,figsize=(8,9))
+        fig.suptitle(self.pltTitle)
         ax1, ax2, ax3, ax4 = axs.flatten()
         ax1.plot(lrotX, lrotY, ".", color="tab:blue", markersize=2, label="rotated")
         ax1.plot(lEdge[:,0], lEdge[:,1], ".", color="tab:orange", alpha=0.4, markersize=2, label="not rotated")
@@ -677,7 +715,7 @@ class MeasureImage(object):
         ax2.plot(rEdge[:,0], rEdge[:,1], ".", color="tab:orange", alpha=0.4, markersize=2)
         ax2.set_title("right edge")
 
-        plt.legend()
+        # plt.legend()
 
 
         # fig, (ax1, ax2) = plt.subplots(1,2,figsize=(10,5))
@@ -740,12 +778,17 @@ if __name__ == "__main__":
 
 
     allDirs = glob.glob("P*")
-    for d in allDirs:
-        print(d)
-        lfile = glob.glob(d+"/"+"*L.fits")[0]
-        dfile = glob.glob(d+"/"+"*N.fits")[0]
-        mi = MeasureImage(lfile, dfile, "./")
+    ons = glob.glob("/Users/csayres/fibermeas/forConor/Sloan/*ON.fits")
+    ons.sort()
+    offs = glob.glob("/Users/csayres/fibermeas/forConor/Sloan/*OFF.fits")
+    offs.sort()
+    for on, off in zip(ons,offs):
+        # print(d)
+        mi = MeasureImage(on, off, "./")
         mi.process()
+
+        break
+
 
         # mi.findFibers()
         # mi.plotRaw()

@@ -5,21 +5,181 @@ import sys
 import matplotlib.pyplot as plt
 import sys
 import traceback
+import glob
+import os
+from multiprocessing import Pool
 
 
-from fibermeas.fibermeas import processImage
+from fibermeas.fibermeas import MeasureImage
+
+import warnings
+warnings.filterwarnings("ignore")
+
+baseDir = "/Users/csayres/fibermeas/forConor/Sloan"
+
+def verifyDirectory(baseDir):
+    allOnFits = glob.glob(baseDir + "/FPU_*ON.fits")
+    allOffFits = glob.glob(baseDir + "/FPU_*OFF.fits")
+
+    allOns = []
+    for ao in allOnFits:
+        base, fname = os.path.split(ao)
+        allOns.append(fname.split("_")[1])
+
+    allOffs = []
+    for aoff in allOnFits:
+        base, fname = os.path.split(aoff)
+        allOffs.append(fname.split("_")[1])
+
+    # print("lens", len(allOns), len(allOffs))
+
+    onSet = set(allOns)
+    offSet = set(allOffs)
+
+    goods = onSet.intersection(offSet)
+    missingOns = offSet.difference(onSet)
+    missingOffs = onSet.difference(offSet)
+
+    # print("goods:", list(goods))
+    # print("midding ons:", list(missingOns))
+    # print("midding offs:", list(missingOffs))
+    return list(goods), list(missingOns), list(missingOffs)
+
+def doOneDir(subDir):
+    workDir = baseDir + "/" + subDir
+    goods, missingOns, missingOffs = verifyDirectory(workDir)
+    if missingOns:
+        print("missing ons", missingOns)
+    if missingOffs:
+        print("missing offs", missingOffs)
+
+    betaArmWidths = []
+    centroids = []
+    failedToRun = []
+
+    for robot in goods:
+        on = glob.glob(workDir + "/FPU_%s*ON.fits"%robot)
+        off = glob.glob(workDir + "/FPU_%s*OFF.fits"%robot)
+        try:
+            assert len(on) == 1
+            assert len(off) == 1
+
+            mi = MeasureImage(on[0], off[0], workDir)
+            mi.plotRaw()
+            mi.process()
+            centroids.extend(list(mi.centroids.dia))
+            betaArmWidths.append(mi.imgModel.medianR-mi.imgModel.medianL)
+        except Exception as e:
+            print("FAILED: ", on[0], off[0])
+            traceback.print_exc(file=sys.stdout)
+            failedToRun.append(on)
+        plt.close("all")
+    return betaArmWidths, centroids, failedToRun, missingOns, missingOffs
+
 
 if __name__ == '__main__':
 
-    for filename in sys.argv[1:]:
-        print("processing image", filename)
-        try:
-            processImage(filename)
-            print("successfully processed", filename)
-        except RuntimeError as e:
-            print("failed to process", filename)
-            traceback.print_exc(file=sys.stdout)
+    subDirs = ["2021Jun17", "2021Jun21", "2021Jun22", "2021Jun23", "2021Jun24", "2021Jun28", "2021Jun29", "2021Jun30"]
+    # subDirs = ["2021Jun30"]
+    p = Pool(10)
+    out = p.map(doOneDir, subDirs)
 
-        # close all open plots
-        plt.close("all")
+    betaArmWidths = []
+    centroids = []
+    failed = []
+    missingOn = []
+    missingOff = []
+
+    for o in out:
+        betaArmWidths.extend(o[0])
+        centroids.extend(o[1])
+        failed.extend(o[2])
+        missingOn.extend(o[3])
+        missingOff.extend(o[4])
+
+
+    print("beta arm widths (px)")
+    for x in betaArmWidths:
+        print(x)
+
+    print("\n\n")
+
+    print("centroid dias (px)")
+    for x in centroids:
+        print(x)
+
+    print("\n\n")
+
+    print("failed")
+    for x in failed:
+        print(x)
+
+    print("\n\n")
+
+    print("missing ons")
+    for x in missingOn:
+        print(x)
+
+    print("\n\n")
+
+    print("missing offs")
+    for x in missingOff:
+        print(x)
+
+
+
+    # nFails = 0
+    # nTries = 0
+    # for d in subDirs:
+    #     print("on dir", d)
+    #     workDir = baseDir + "/" + d
+    #     goods, missingOns, missingOffs = verifyDirectory(workDir)
+    #     if missingOns:
+    #         print("missing ons", missingOns)
+    #     if missingOffs:
+    #         print("missing offs", missingOffs)
+
+    #     for robot in goods:
+    #         nTries += 1
+    #         try:
+    #             on = glob.glob(workDir + "/FPU_%s*ON.fits"%robot)
+    #             assert len(on) == 1
+    #             off = glob.glob(workDir + "/FPU_%s*OFF.fits"%robot)
+    #             assert len(off) == 1
+
+    #             mi = MeasureImage(on[0], off[0], workDir)
+    #             mi.process()
+    #         except Exception as e:
+    #             nFails += 1
+    #             print("FAILED: ", d, on[0], off[0])
+    #             traceback.print_exc(file=sys.stdout)
+    #         plt.close("all")
+
+    # print("%i of %i failed %.2f rate"%(nFails, nTries, nFails/nTries))
+            # break
+
+    # allDirs = glob.glob("P*")
+    # ons = glob.glob("/Users/csayres/fibermeas/forConor/Sloan/*ON.fits")
+    # ons.sort()
+    # offs = glob.glob("/Users/csayres/fibermeas/forConor/Sloan/*OFF.fits")
+    # offs.sort()
+    # for on, off in zip(ons,offs):
+    #     # print(d)
+    #     mi = MeasureImage(on, off, "./")
+    #     mi.process()
+    #     plt.close("all")
+
+        # break
+
+    # for filename in sys.argv[1:]:
+    #     print("processing image", filename)
+    #     try:
+    #         processImage(filename)
+    #         print("successfully processed", filename)
+    #     except RuntimeError as e:
+    #         print("failed to process", filename)
+    #         traceback.print_exc(file=sys.stdout)
+
+    #     # close all open plots
+    #     plt.close("all")
 
