@@ -417,10 +417,10 @@ class MeasureImage(object):
         # _gradData = []
 
         # for horizontal gradients only look at y range between fibers
-        minRow = int(self.centroids[self.centroids.fiberID == "Metrology"].row)
-        maxRow = int(self.centroids[self.centroids.fiberID == "BOSS"].row)
-        minCol = int(self.centroids[self.centroids.fiberID == "Apogee"].col)
-        maxCol = int(self.centroids[self.centroids.fiberID == "BOSS"].col)
+        self.minRow = int(self.centroids[self.centroids.fiberID == "Metrology"].row)
+        self.maxRow = int(self.centroids[self.centroids.fiberID == "BOSS"].row)
+        self.minCol = int(self.centroids[self.centroids.fiberID == "Apogee"].col)
+        self.maxCol = int(self.centroids[self.centroids.fiberID == "BOSS"].col)
         # import pdb; pdb.set_trace()
         # print(minRow, maxRow)
         # first determine bounding box ii1, ii2, jj1 are limits
@@ -443,24 +443,33 @@ class MeasureImage(object):
             # plt.imshow(grad, origin="lower")
             # plt.show()
             if axis == 1:
-                meanVal = numpy.mean(grad[minRow:maxRow, :], axis=0)
-                stdVal = numpy.std(grad[minRow:maxRow, :], axis=0)
-                # meanVal = numpy.mean(grad[minRow:maxRow, :], axis=0)
-                # stdVal = numpy.std(grad[minRow:maxRow, :], axis=0)
+                # meanVal = numpy.mean(grad, axis=0)
+                # stdVal = numpy.std(grad, axis=0)
+                meanVal = numpy.mean(grad[self.minRow:self.maxRow, :], axis=0)
+                stdVal = numpy.std(grad[self.minRow:self.maxRow, :], axis=0)
             else:
-                meanVal = numpy.mean(grad[minCol:maxCol, :], axis=0)
-                stdVal = numpy.std(grad[minCol:maxCol, :], axis=0)
-                # meanVal = numpy.mean(grad[minCol:maxCol, :], axis=0)
-                # stdVal = numpy.std(grad[minCol:maxCol, :], axis=0)
+                # meanVal = numpy.mean(grad, axis=0)
+                # stdVal = numpy.std(grad, axis=0)
+                meanVal = numpy.mean(grad[self.minCol:self.maxCol, :], axis=0)
+                stdVal = numpy.std(grad[self.minCol:self.maxCol, :], axis=0)
 
             if axis == 1:
                 # rBG = numpy.mean(meanVal[:backgroundPxRange])
                 rBG = 0
                 rSD = numpy.mean(stdVal[:backgroundPxRange])
-                aw = numpy.argwhere(meanVal < -1 * (rBG + LRstdDetect * rSD)).flatten()
+
+                # find leftmost very big positive bump (chamfer edge)
+                aw = numpy.argwhere(meanVal > (rBG + 2.5 * LRstdDetect * rSD)).flatten()
                 ii1 = aw[0]  # left side region of interest
-                aw = numpy.argwhere(meanVal > rBG + LRstdDetect * rSD).flatten()
-                ii2 = aw[-1]  # right side region of interest
+
+                # find righmost very big negative bump (chamfer edge)
+                aw = numpy.argwhere(meanVal < -1 * (rBG + 2.5 * LRstdDetect * rSD)).flatten()
+                ii2 = aw[-1]  # left side region of interest
+
+                # aw = numpy.argwhere(meanVal < -1 * (rBG + LRstdDetect * rSD)).flatten()
+                # ii1 = aw[0]  # left side region of interest
+                # aw = numpy.argwhere(meanVal > rBG + LRstdDetect * rSD).flatten()
+                # ii2 = aw[-1]  # right side region of interest
 
                 # left right limits in image where beta arm should be
                 self.ii1 = ii1 # save incase wanted later
@@ -490,7 +499,7 @@ class MeasureImage(object):
             grad = gaussian_filter1d(grad, gradientSmoothPx, axis=axis)
             if axis == 1:
                 # for row in range(jj1 + bboxBufferPx):  # only iterate up to top of robot
-                for row in range(minRow, maxRow+30):
+                for row in range(self.minRow, self.maxRow+30):
                     line = grad[row]
 
                     peaks = find_peaks(line)[0]
@@ -522,7 +531,7 @@ class MeasureImage(object):
             else:
                 grad = grad.T
                 # for col in range(ii1 - bboxBufferPx, ii2 + bboxBufferPx):
-                for col in range(minCol, maxCol):
+                for col in range(self.minCol, self.maxCol):
                     line = grad[col]
                     peaks = find_peaks(line)[0]
                     prom = peak_prominences(line, peaks)[0]
@@ -560,7 +569,7 @@ class MeasureImage(object):
         fig.suptitle(self.pltTitle)
         ax1.imshow(grad, origin="lower")
         ax1.set_title("%s Left-Right Smoothed Gradient"%self.basename)
-        for line in grad:
+        for line in grad[self.minRow:self.maxRow]:
             ax2.plot(numpy.arange(len(line)), line, '-', color="black", alpha=0.02)
         meanVal = numpy.mean(grad, axis=0)
         ax2.plot(numpy.arange(len(meanVal)), meanVal, '-', color="white", alpha=0.8)
@@ -578,7 +587,7 @@ class MeasureImage(object):
         fig.suptitle(self.pltTitle)
         ax1.imshow(grad, origin="lower")
         ax1.set_title("%s Up-Down Smoothed Gradient"%self.basename)
-        for line in grad.T: # traspose to iterate over columns
+        for line in grad.T[self.minCol:self.maxCol]: # traspose to iterate over columns
             ax2.plot(line, numpy.arange(len(line)), '-', color="black", alpha=0.02)
         meanVal = numpy.mean(grad, axis=1)
         ax2.plot(meanVal, numpy.arange(len(meanVal)), '-', color="white", alpha=0.8)
@@ -621,11 +630,12 @@ class MeasureImage(object):
 
         df = self.edgeDetections
         dfTop = df[df.side == "top"]
-        dfTop = dfTop[dfTop.prom > promThresh]
-        midCol = numpy.median(dfTop.col)
-        dfTop = dfTop[
-            (dfTop.col > midCol - topWidthPx/2) & (dfTop.col < midCol + topWidthPx/2)
-        ]
+
+        # dfTop = dfTop[dfTop.prom > promThresh]
+        # midCol = numpy.median(dfTop.col)
+        # dfTop = dfTop[
+        #     (dfTop.col > midCol - topWidthPx/2) & (dfTop.col < midCol + topWidthPx/2)
+        # ]
 
         # find the linear fit
         X = numpy.ones((len(dfTop), 2))
