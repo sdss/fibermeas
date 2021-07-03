@@ -398,7 +398,7 @@ class MeasureImage(object):
         # how many pixels to grow the left, right, and top edge detections for
         # narrowing line by line detections of arm edge, ignoring everything
         # outside
-        bboxBufferPx = 5
+        bboxBufferPx = 10
         #####################################################################
 
         # data = exposure.equalize_hist(self.mainData)
@@ -460,11 +460,57 @@ class MeasureImage(object):
 
                 # find leftmost very big positive bump (chamfer edge)
                 aw = numpy.argwhere(meanVal > (rBG + 2.5 * LRstdDetect * rSD)).flatten()
-                ii1 = aw[0]  # left side region of interest
+                self.leftChamf = aw[0]  # left side region of interest
 
                 # find righmost very big negative bump (chamfer edge)
                 aw = numpy.argwhere(meanVal < -1 * (rBG + 2.5 * LRstdDetect * rSD)).flatten()
-                ii2 = aw[-1]  # left side region of interest
+                self.rightChamf = aw[-1]  # left side region of interest
+
+                # find left most edge of robot small negative bump
+                # before the left chamfer edge
+                # begin scanning until zero crossing
+
+                # grad2 = numpy.gradient(meanVal)
+
+                score = 1e9
+                for col in numpy.arange(0, self.leftChamf)[::-1]:
+                    v = meanVal[col]
+                    if v > score:
+                        ii1 = col
+                        break
+                    score = v
+                    #     valuesIncreasing = True
+
+                    # score = v
+                    # if valuesIncreasing and v > -1 * (rBG + 0.25 * LRstdDetect * rSD):
+                    #     ii1 = col
+                    #     break
+
+                # find right most edge of robot, small positive bump
+                # after chamfer edge
+                score = -1e9
+                for col in numpy.arange(self.rightChamf, len(meanVal)):
+                    v = meanVal[col]
+                    if v < score:
+                        ii2 = col
+                        break
+                    score = v
+                    #     valuesDecreasing = True
+                    # score = v
+                    # if valuesDecreasing and v < (rBG + 0.25 * LRstdDetect * rSD):
+                    #     ii2 = col
+                    #     break
+
+                # aw = numpy.argwhere(meanVal < -1 * (rBG + 0.5 * LRstdDetect * rSD)).flatten()
+                # # import pdb; pdb.set_trace()
+                # aw = aw[aw < self.leftChamf]
+                # ii1 = aw[0]
+
+                # # find right most edge of robot, small positive bump
+                # # after chamfer edge
+                # aw = numpy.argwhere(meanVal > (rBG + 0.5 * LRstdDetect * rSD)).flatten()
+                # aw = aw[aw > self.rightChamf]
+                # ii2 = aw[-1]
 
                 # aw = numpy.argwhere(meanVal < -1 * (rBG + LRstdDetect * rSD)).flatten()
                 # ii1 = aw[0]  # left side region of interest

@@ -45,7 +45,7 @@ def verifyDirectory(baseDir):
     # print("midding offs:", list(missingOffs))
     return list(goods), list(missingOns), list(missingOffs)
 
-doOnly = ["P1287"] #, "P0585", "P0455", "P0437", "P0409", "P0499", "P0698"]
+doOnly = ["P1287", "P0585", "P0455", "P0437", "P0409", "P0499", "P0698"]
 
 def doOneDir(subDir):
     workDir = baseDir + "/" + subDir
