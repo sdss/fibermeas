@@ -79,8 +79,11 @@ def doOneDir(subDir):
 
 if __name__ == '__main__':
 
-    subDirs = ["2021Jun17", "2021Jun21", "2021Jun22", "2021Jun23", "2021Jun24", "2021Jun28", "2021Jun29", "2021Jun30"]
-    # subDirs = ["2021Jun30"]
+    subDirs = [
+        "2021Jun17", "2021Jun21", "2021Jun22", "2021Jun23",
+        "2021Jun24", "2021Jun28", "2021Jun29", "2021Jun30", "2021Jul01"
+    ]
+    subDirs = ["2021Jul01"]
     p = Pool(10)
     out = p.map(doOneDir, subDirs)
 
