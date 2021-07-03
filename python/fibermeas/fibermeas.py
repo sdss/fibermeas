@@ -185,6 +185,30 @@ class MeasureImage(object):
 
         self.plotList = [] # keep track of which plots are made
 
+
+    # def plotROIs(self):
+    #     fitWidth = 0.4 # mm top left right
+    #     fitHeight = 0.1 # mm
+
+    #     # estimate scale from fiber diameters
+    #     imgscale = 120 / numpy.mean(self.centroids.dia)
+    #     # equation through the ap/boss fibers
+    #     metXYPix = self.centroids[self.centroids.fiberID == "Metrology"][["col", "row"]].to_numpy()[0]
+    #     met2TopPix = MicronPerMM * (BetaImgModel.betaAxis2Top - BetaImgModel.modelMetXY[0]) / imgscale
+    #     # topMidYPix = metXYPix[1] + MicronPerMM * (BetaImgModel.betaAxis2Top - BetaImgModel.modelMetXY) / IMG_SCALE_GUESS
+    #     # topLPix = metXYPix[0] - MicronPerMM * 0.5 * fitWidth / IMG_SCALE_GUESS
+    #     # topRPix = metXYPix[0] + MicronPerMM * 0.5 * fitWidth / IMG_SCALE_GUESS
+    #     # LL = numpy.array([topLPix, topMidYPix - MicronPerMM * 0.5 * fitHeight / IMG_SCALE_GUESS])
+    #     # UR = numpy.array([topRPix, topMidYPix - MicronPerMM * 0.5 * fitHeight / IMG_SCALE_GUESS])
+
+    #     plt.imshow(self.mainData, origin="lower")
+    #     plt.plot(metXYPix[0], metXYPix[1]+met2TopPix, 'xr')
+    #     plt.show()
+
+        # print(metXY)
+
+
+
     def process(self):
         self.findFibers()
         self.detectEdges()
@@ -247,10 +271,10 @@ class MeasureImage(object):
 
         for fiberID in fiberIDs:
             frow = self.centroids[self.centroids.fiberID == fiberID]
-            plt.plot(frow.x, frow.y, "x", ms=6, markeredgecolor="tab:red")
+            plt.plot(frow.col, frow.row, "x", ms=6, markeredgecolor="tab:red")
             # import pdb; pdb.set_trace()
             plotCircle(
-                float(frow.x), float(frow.y),
+                float(frow.col), float(frow.row),
                 float(frow.dia)/2, color="tab:red", linestyle=":")
 
         filenames = [os.path.join(self.outputDir, "%s_all.png"%self.basename)]
@@ -258,8 +282,8 @@ class MeasureImage(object):
 
         for fiberID in fiberIDs:
             frow = self.centroids[self.centroids.fiberID == fiberID]
-            x = float(frow.x)
-            y = float(frow.y)
+            x = float(frow.col)
+            y = float(frow.row)
             plt.xlim([x-40, x+40])
             plt.ylim([y-40, y+40])
             plt.title(fiberID)
@@ -345,8 +369,8 @@ class MeasureImage(object):
         fiberID = ["Apogee", "Metrology", "BOSS"]
 
         d = {}
-        d["x"] = centroid[:, 0]
-        d["y"] = centroid[:, 1]
+        d["col"] = centroid[:, 0]
+        d["row"] = centroid[:, 1]
         d["dia"] = centroid[:, 2]
         d["ecen"] = centroid[:,3]
         d["fiberID"] = fiberID
@@ -368,17 +392,17 @@ class MeasureImage(object):
         backgroundPxRange = 35
         # how many stds above mean background to declare a "detection"
         # for left right gradient
-        LRstdDetect = 4
+        LRstdDetect = 10
         # how many stds above mean background to declare a "detection" for top
-        TstdDetect = 4
+        TstdDetect = 10
         # how many pixels to grow the left, right, and top edge detections for
         # narrowing line by line detections of arm edge, ignoring everything
         # outside
         bboxBufferPx = 5
         #####################################################################
 
+        # data = exposure.equalize_hist(self.mainData)
         data = self.mainData
-
         # images are noisy, smooth them a bit
         # (and smooth them again after gradients)
         data = gaussian(data, smoothPx)
@@ -392,10 +416,17 @@ class MeasureImage(object):
         _width = []
         # _gradData = []
 
+        # for horizontal gradients only look at y range between fibers
+        minRow = int(self.centroids[self.centroids.fiberID == "Metrology"].row)
+        maxRow = int(self.centroids[self.centroids.fiberID == "BOSS"].row)
+        minCol = int(self.centroids[self.centroids.fiberID == "Apogee"].col)
+        maxCol = int(self.centroids[self.centroids.fiberID == "BOSS"].col)
+        # import pdb; pdb.set_trace()
+        # print(minRow, maxRow)
         # first determine bounding box ii1, ii2, jj1 are limits
         for axis in [1, 0]:
             grad = numpy.gradient(data, axis=axis)
-            grad = numpy.abs(grad)   # try abs after smoothing?
+            # grad = numpy.abs(grad)   # try abs after smoothing?
             grad = gaussian_filter1d(grad, gradientSmoothPx, axis=axis)
 
             # _gradData.append(grad)
@@ -408,25 +439,41 @@ class MeasureImage(object):
             else:
                 self.horizGrad = grad
 
-            meanVal = numpy.mean(grad, axis=0)
-            stdVal = numpy.std(grad, axis=0)
+            # print("axis", axis)
+            # plt.imshow(grad, origin="lower")
+            # plt.show()
+            if axis == 1:
+                meanVal = numpy.mean(grad[minRow:maxRow, :], axis=0)
+                stdVal = numpy.std(grad[minRow:maxRow, :], axis=0)
+                # meanVal = numpy.mean(grad[minRow:maxRow, :], axis=0)
+                # stdVal = numpy.std(grad[minRow:maxRow, :], axis=0)
+            else:
+                meanVal = numpy.mean(grad[minCol:maxCol, :], axis=0)
+                stdVal = numpy.std(grad[minCol:maxCol, :], axis=0)
+                # meanVal = numpy.mean(grad[minCol:maxCol, :], axis=0)
+                # stdVal = numpy.std(grad[minCol:maxCol, :], axis=0)
 
             if axis == 1:
-                rBG = numpy.mean(meanVal[:backgroundPxRange])
+                # rBG = numpy.mean(meanVal[:backgroundPxRange])
+                rBG = 0
                 rSD = numpy.mean(stdVal[:backgroundPxRange])
-                aw = numpy.argwhere(meanVal > rBG + LRstdDetect * rSD).flatten()
+                aw = numpy.argwhere(meanVal < -1 * (rBG + LRstdDetect * rSD)).flatten()
                 ii1 = aw[0]  # left side region of interest
+                aw = numpy.argwhere(meanVal > rBG + LRstdDetect * rSD).flatten()
                 ii2 = aw[-1]  # right side region of interest
 
                 # left right limits in image where beta arm should be
                 self.ii1 = ii1 # save incase wanted later
                 self.ii2 = ii2 # save incase wanted later
+                # rough scale based on 3mm wide beta arm
+                self.roughScale = 3 * MicronPerMM / (ii2 - ii1)
 
             else:
                 # top side background
-                tBG = numpy.mean(meanVal[-backgroundPxRange:])
+                # tBG = numpy.mean(meanVal[-backgroundPxRange:])
+                tBG = 0
                 tSD = numpy.mean(stdVal[-backgroundPxRange:])
-                aw = numpy.argwhere(meanVal > tBG + TstdDetect * tSD).flatten()
+                aw = numpy.argwhere(meanVal > (tBG + TstdDetect * tSD)).flatten()
 
                 # top limit in image where beta arm should be
                 #  ii1, ii2, jj1 form the rough frame of the beta arm
@@ -439,10 +486,11 @@ class MeasureImage(object):
         for axis in [1, 0]:
             ### repeating this junk from before
             grad = numpy.gradient(data, axis=axis)
-            grad = numpy.abs(grad)
+            grad = numpy.abs(grad)  # this time abs the grad
             grad = gaussian_filter1d(grad, gradientSmoothPx, axis=axis)
             if axis == 1:
-                for row in range(jj1 + bboxBufferPx):  # only iterate up to top of robot
+                # for row in range(jj1 + bboxBufferPx):  # only iterate up to top of robot
+                for row in range(minRow, maxRow+30):
                     line = grad[row]
 
                     peaks = find_peaks(line)[0]
@@ -473,7 +521,8 @@ class MeasureImage(object):
 
             else:
                 grad = grad.T
-                for col in range(ii1 - bboxBufferPx, ii2 + bboxBufferPx):
+                # for col in range(ii1 - bboxBufferPx, ii2 + bboxBufferPx):
+                for col in range(minCol, maxCol):
                     line = grad[col]
                     peaks = find_peaks(line)[0]
                     prom = peak_prominences(line, peaks)[0]
@@ -564,8 +613,8 @@ class MeasureImage(object):
         # the width about the median column of top edgedetections
         # to use for line fitting
         # 1.5 is found by inspection to get most of the top flat
-        topWidthMicron = 0.6 * MicronPerMM * 1.8
-        topWidthPx = topWidthMicron / IMG_SCALE_GUESS # self.mainHeader["PIXSCALE"]
+        topWidthMicron = 0.6 * MicronPerMM # * 1.8
+        topWidthPx = topWidthMicron / self.roughScale # self.mainHeader["PIXSCALE"]
         # prom threshold is the minimum signal to declare a valid detectoin
         promThresh = 0.0002
         ####################################################
@@ -602,7 +651,7 @@ class MeasureImage(object):
         # for finding the left and right edges
         # top is 1.3 mm below the top of the beta arm
         # bottom is 2*1.3 mm below the top of the beta arm
-        topThresh = -1.3*MicronPerMM / IMG_SCALE_GUESS # self.mainHeader["PIXSCALE"]
+        topThresh = -1.3*MicronPerMM / self.roughScale # self.mainHeader["PIXSCALE"]
         bottomThresh = 2*topThresh
         ###############################################
 
@@ -630,20 +679,20 @@ class MeasureImage(object):
         rrotated = (rotMat @ rEdge.T).T
 
         # only use data below 1.3 and above 2*1.3 mm ( the radius of the curve)
-        lkeep1 = lrotated[:,1] < topThresh  # inspection
-        lkeep2 = lrotated[:,1] > bottomThresh  # inspection
-        lkeep = lkeep1 & lkeep2
-        lrotated = lrotated[lkeep]
-        lEdge = lEdge[lkeep]
+        # lkeep1 = lrotated[:,1] < topThresh  # inspection
+        # lkeep2 = lrotated[:,1] > bottomThresh  # inspection
+        # lkeep = lkeep1 & lkeep2
+        # lrotated = lrotated[lkeep]
+        # lEdge = lEdge[lkeep]
 
         # only use data below 1.2 mm ( the radius of the curve)
         # 1.3 mm below the top of beta arm and above 2*1.3
         # get the left right edges in the zone near the fiber heads
-        rkeep1 = rrotated[:,1] < topThresh  # inspection
-        rkeep2 = rrotated[:,1] > bottomThresh  # inspection
-        rkeep = rkeep1 & rkeep2
-        rrotated = rrotated[rkeep]
-        rEdge = rEdge[rkeep]
+        # rkeep1 = rrotated[:,1] < topThresh  # inspection
+        # rkeep2 = rrotated[:,1] > bottomThresh  # inspection
+        # rkeep = rkeep1 & rkeep2
+        # rrotated = rrotated[rkeep]
+        # rEdge = rEdge[rkeep]
 
         # find the midpoint between left and right axes
         # on the rotated column axis
@@ -653,10 +702,12 @@ class MeasureImage(object):
 
         # save the selections of original points used
         ldetections = df[df.side=="left"]
-        self.leftEdgeSelection = ldetections[lkeep]
+        # self.leftEdgeSelection = ldetections[lkeep]
+        self.leftEdgeSelection = ldetections
 
         rdetections = df[df.side=="right"]
-        self.rightEdgeSelection = rdetections[rkeep]
+        # self.rightEdgeSelection = rdetections[rkeep]
+        self.rightEdgeSelection = rdetections
 
         # plt.figure()
         # plt.plot(lrotated[:,0], lrotated[:,1])
@@ -687,7 +738,7 @@ class MeasureImage(object):
     def fitBetaFrame(self):
         b, m = self._fitTop()
         medianL, medianR = self._fitEdges(b, m)
-        self.imgModel = BetaImgModel(b, m, medianL, medianR, IMG_SCALE_GUESS) #self.mainHeader["PIXSCALE"])
+        self.imgModel = BetaImgModel(b, m, medianL, medianR, self.roughScale) #self.mainHeader["PIXSCALE"])
 
     def plotLRfits(self):
         lEdge = self.leftEdgeSelection[["col", "row"]].to_numpy()
