@@ -18,6 +18,8 @@ import pandas as pd
 import seaborn as sns
 import os
 import shutil
+from scipy.optimize import minimize
+from jinja2 import Environment, PackageLoader, select_autoescape
 
 MicronPerMM = 1000
 IMG_SCALE_GUESS = 3.62
@@ -59,7 +61,6 @@ class BetaImgModel(object):
             [numpy.cos(-self.imgRotRad), numpy.sin(-self.imgRotRad)],
             [-numpy.sin(-self.imgRotRad), numpy.cos(-self.imgRotRad)]
         ])
-
 
     def img2rotFrame(self, xPix, yPix):
         """take xy pixels and rotate them into rotated frame
@@ -132,7 +133,7 @@ class BetaImgModel(object):
 
 class MeasureImage(object):
 
-    def __init__(self, litImageFileName, darkImageFileName, outputDir):
+    def __init__(self, litImageFileName, darkImageFileName, outputDir, threshMult = 1):
         # self.basename = litImageFileName.split("_")[1]  #PXXXXX
         junk, filename = os.path.split(litImageFileName)
         self.basename = filename.split("_")[1]
@@ -141,11 +142,12 @@ class MeasureImage(object):
         self.litFile = litImageFileName
         self.darkFile = darkImageFileName
         self.outputDir = outputDir
+        self.threshMult = threshMult
         self.pltTitle = "%s %s"%(self.basedir, self.basename)
 
         # read and rotate images 180 degrees for my sanity
-        self.litData = fitsio.read(litImageFileName)[::-1, ::-1]
-        self.darkData = fitsio.read(darkImageFileName)[::-1, ::-1]
+        self.litData = fitsio.read(litImageFileName)[::-1,:]#[::-1, ::-1]
+        self.darkData = fitsio.read(darkImageFileName)[::-1,:]#[::-1, ::-1]
         self.litHeader = fitsio.read_header(litImageFileName)
         self.darkHeader = fitsio.read_header(darkImageFileName)
         # choose the "main" image for analysis
@@ -213,6 +215,7 @@ class MeasureImage(object):
         self.findFibers()
         self.detectEdges()
         self.fitBetaFrame()
+        self.writeData()
 
         self.plotList.append(self.plotRaw())
         self.plotList.extend(self.plotGradMarginals())
@@ -392,9 +395,9 @@ class MeasureImage(object):
         backgroundPxRange = 35
         # how many stds above mean background to declare a "detection"
         # for left right gradient
-        LRstdDetect = 10
+        LRstdDetect = 10 * self.threshMult
         # how many stds above mean background to declare a "detection" for top
-        TstdDetect = 10
+        TstdDetect = 10 * self.threshMult
         # how many pixels to grow the left, right, and top edge detections for
         # narrowing line by line detections of arm edge, ignoring everything
         # outside
@@ -416,7 +419,7 @@ class MeasureImage(object):
         _width = []
         # _gradData = []
 
-        # for horizontal gradients only look at y range between fibers
+        # for horizontal gradients only look at xy range between fibers
         self.minRow = int(self.centroids[self.centroids.fiberID == "Metrology"].row)
         self.maxRow = int(self.centroids[self.centroids.fiberID == "BOSS"].row)
         self.minCol = int(self.centroids[self.centroids.fiberID == "Apogee"].col)
@@ -697,6 +700,64 @@ class MeasureImage(object):
 
         return coef[0], coef[1]
 
+    # def _fitEdges2(self):
+
+    #     ldf = self.edgeDetections[self.edgeDetections.side=="left"][["col", "row"]].to_numpy().T
+    #     rdf = self.edgeDetections[self.edgeDetections.side=="right"][["col", "row"]].to_numpy().T
+    #     tdf = self.edgeDetections[self.edgeDetections.side=="top"][["col", "row"]].to_numpy().T
+
+    #     def rotSearch(theta):
+    #         cost = 0
+
+    #         cosTheta = numpy.cos(theta[0])
+    #         sinTheta = numpy.sin(theta[0])
+    #         img2rotMat = numpy.array([
+    #             [cosTheta, sinTheta],
+    #             [-sinTheta, cosTheta]
+    #         ])
+
+    #         lrot = img2rotMat @ ldf
+    #         cost += numpy.var(lrot[0])
+
+    #         rrot = img2rotMat @ rdf
+    #         cost += numpy.var(rrot[0])
+
+    #         trot = img2rotMat @ tdf
+    #         cost += numpy.var(trot[1])
+
+    #         return cost
+
+
+    #     initGuess = [self.imgModel.imgRotRad]
+    #     out = minimize(rotSearch, initGuess)
+    #     import pdb; pdb.set_trace()
+
+
+
+        # find the linear fit
+        # X = numpy.ones((len(ldf), 2))
+        # X[:,1] = ldf.row.to_numpy()
+        # y = ldf.col.to_numpy()
+        # lCoef = numpy.linalg.lstsq(X, y)[0]
+
+        # X = numpy.ones((len(rdf), 2))
+        # X[:,1] = rdf.row.to_numpy()
+        # y = rdf.col.to_numpy()
+        # rCoef = numpy.linalg.lstsq(X, y)[0]
+
+        # X = numpy.ones((len(tdf), 2))
+        # X[:,1] = tdf.col.to_numpy()
+        # y = tdf.row.to_numpy()
+        # tCoef = numpy.linalg.lstsq(X, y)[0]
+
+        # rotLeft = numpy.degrees(numpy.arctan(lCoef[1]))
+        # rotRight = numpy.degrees(numpy.arctan(rCoef[1]))
+        # rotTop = numpy.degrees(numpy.arctan(tCoef[1]))
+        # print("rots", rotLeft, rotRight, rotTop)
+
+        # self.imgRotRad = numpy.arctan(m) # positive means CCD is rotated CW wrt beta arm
+        # self.imgRotDeg = numpy.degrees(self.imgRotRad)
+
     def _fitEdges(self, b, m):
         # find the left and right sizes of the beta arm after
         # rotating detections by the (CCD rotation) angle found
@@ -707,8 +768,8 @@ class MeasureImage(object):
         # for finding the left and right edges
         # top is 1.3 mm below the top of the beta arm
         # bottom is 2*1.3 mm below the top of the beta arm
-        topThresh = -1.3*MicronPerMM / self.roughScale # self.mainHeader["PIXSCALE"]
-        bottomThresh = 2*topThresh
+        # topThresh = -1.3*MicronPerMM / self.roughScale # self.mainHeader["PIXSCALE"]
+        # bottomThresh = 2*topThresh
         ###############################################
 
         imgRotRad = numpy.arctan(m)
@@ -776,14 +837,14 @@ class MeasureImage(object):
 
     def plotTopFits(self):
         fig = plt.figure()
-        fig.suptitle(self.pltTitle)
+        # fig.suptitle(self.pltTitle)
         dfTop = self.edgeDetections[self.edgeDetections.side=="top"]
         plt.plot(dfTop.col, dfTop.row, '.', color="tab:orange")
         plt.plot(self.topEdgeSelection.col, self.topEdgeSelection.row, '.', color="tab:blue", alpha=0.5)
         xs = numpy.linspace(numpy.min(self.topEdgeSelection.col)-150, numpy.max(self.topEdgeSelection.col)+150)
         ys = self.imgModel.b + self.imgModel.m*xs
         plt.plot(xs, ys, '--', color="black")
-        plt.title("Top Edge \nImg Rot = %.5f deg"%self.imgModel.imgRotDeg)
+        plt.title("%s \nTop Edge \nImg Rot = %.5f deg"%(self.pltTitle, self.imgModel.imgRotDeg))
         plt.xlabel("image row")
         plt.ylabel("image col")
         filename = os.path.join(self.outputDir, "%s_topFit.png"%self.basename)
@@ -839,6 +900,46 @@ class MeasureImage(object):
         plt.savefig(filename, dpi=350)
         plt.close()
         return filename
+
+
+    def writeData(self):
+        robotID = [self.basename]*len(self.edgeDetections)
+        self.edgeDetections["robotID"] = robotID
+        fname = os.path.join(self.outputDir, "%s_edges.csv"%self.basename)
+        self.edgeDetections.to_csv(fname, index=False)
+
+        robotID = [self.basename]*len(self.centroids)
+        self.centroids["robotID"] = robotID
+
+        self.centroids["imgScale"] = [self.roughScale] * len(self.centroids)
+
+        self.centroids["imgRot"] = [self.imgModel.imgRotDeg] * len(self.centroids)
+
+        # plot expected fiber locations
+        fiberExpect = numpy.array([
+            self.imgModel.modelApXY,
+            self.imgModel.modelMetXY,
+            self.imgModel.modelBossXY
+        ])
+
+        fiberIDs = ["Apogee", "Metrology", "BOSS"]
+
+        xyImg = self.centroids[["col", "row"]].to_numpy()
+        xBeta, yBeta = self.imgModel.img2betaFrame(xyImg[:,0], xyImg[:,1])
+
+        self.centroids["xBetaMeasMM"] = xBeta
+        self.centroids["yBetaMeasMM"] = yBeta
+        self.centroids["xBetaExpectMM"] = fiberExpect[:,0]
+        self.centroids["yBetaExpectMM"] = fiberExpect[:,1]
+
+        fname = os.path.join(self.outputDir, "%s_centroids.csv"%self.basename)
+        self.centroids.to_csv(fname, index=False)
+
+
+
+        # import pdb; pdb.set_trace()
+
+
 
 # def plotFullSoln(imgName, b, m, medianL, medianR):
 #     ddata = fitsio.read(imgName)

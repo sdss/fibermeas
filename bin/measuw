@@ -1,0 +1,61 @@
+#!/usr/bin/env python
+# encoding: utf-8
+import argparse
+import sys
+import matplotlib.pyplot as plt
+import sys
+import traceback
+import glob
+import os
+from multiprocessing import Pool
+import datetime
+import pandas as pd
+import fibermeas
+from fibermeas.fibermeas import MeasureImage
+import time
+
+import warnings
+warnings.filterwarnings("ignore")
+
+baseDir = "/Users/csayres/fibermeas/forConor/"
+outDir = "./"
+
+robots = [(734, 0.5), (428, 0.5), (561, 0.5), (594, 0.5), (649, 0.5), (497, 0.5), (484, 0.5), (704, 0.5), (524, 0.5), (645,1), (457,1), (705, 0.5), (566,1)]
+
+imgPairs = []
+for robot, thresh in robots:
+    on = glob.glob(baseDir + "*P0%i*L.fits"%robot)[0]
+    off = glob.glob(baseDir + "*P0%i*N.fits"%robot)[0]
+    imgPairs.append([on,off])
+
+
+def doOnePair(x):
+    onImg, offImg = x
+    failedToRun = False
+    try:
+        mi = MeasureImage(onImg, offImg, outDir, threshMult=0.25)
+        mi.plotRaw()
+        mi.process()
+    except Exception:
+        print("FAILED: ", onImg, offImg)
+        traceback.print_exc(file=sys.stdout)
+        failedToRun = True
+    plt.close("all")
+    if failedToRun:
+        return x
+    else:
+        return None
+
+
+if __name__ == '__main__':
+
+    if not os.path.exists(outDir):
+        os.mkdir(outDir)
+
+    p = Pool(12)
+    tstart = time.time()
+    _failedToRun = p.map(doOnePair, imgPairs)
+    print("took %.2f minutes"%((time.time()-tstart)/60))
+
+
+
