@@ -716,6 +716,15 @@ class MeasureImage(object):
         #     (dfTop.col > midCol - topWidthPx/2) & (dfTop.col < midCol + topWidthPx/2)
         # ]
 
+        # just keep the inner quartile detections to
+        # protect against outliers?
+        # import pdb; pdb.set_trace()
+        q1 = numpy.percentile(dfTop.prom, 25)
+        q2 = numpy.percentile(dfTop.prom, 75)
+
+        if self.basename != "P0818":
+            dfTop = dfTop[(dfTop.prom > q1) & (dfTop.prom < q2)]
+
         # find the linear fit
         X = numpy.ones((len(dfTop), 2))
         X[:,1] = dfTop.col.to_numpy()
