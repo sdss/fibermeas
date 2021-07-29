@@ -18,7 +18,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 baseDir = "/Users/csayres/fibermeas/forConor/"
-outDir = "./"
+outDir = "./uwrobots"
 
 robots = [(734, 0.5), (428, 0.5), (561, 0.5), (594, 0.5), (649, 0.5), (497, 0.5), (484, 0.5), (704, 0.5), (524, 0.5), (645,1), (457,1), (705, 0.5), (566,1)]
 
@@ -26,7 +26,7 @@ imgPairs = []
 for robot, thresh in robots:
     on = glob.glob(baseDir + "*P0%i*L.fits"%robot)[0]
     off = glob.glob(baseDir + "*P0%i*N.fits"%robot)[0]
-    imgPairs.append([on,off])
+    imgPairs.append([on, off])
 
 
 def doOnePair(x):
@@ -46,16 +46,33 @@ def doOnePair(x):
     else:
         return None
 
+def compileResults():
+    files = glob.glob(outDir + "/*centroids.csv")
+    dfs = []
+    for f in files:
+        dfs.append(pd.read_csv(f, index_col=0))
+
+    allFibers = pd.concat(dfs).reset_index()
+
+    # add integer version of robot ID
+    robotIDs = allFibers["robotID"]
+    robotInts = [int(x.strip("P")) for x in robotIDs]
+    allFibers["robotID"] = robotInts
+
+    allFibers.to_csv(outDir + "/allFibers.csv", index=False)
+
 
 if __name__ == '__main__':
 
-    if not os.path.exists(outDir):
-        os.mkdir(outDir)
+    # if not os.path.exists(outDir):
+    #     os.mkdir(outDir)
 
-    p = Pool(12)
-    tstart = time.time()
-    _failedToRun = p.map(doOnePair, imgPairs)
-    print("took %.2f minutes"%((time.time()-tstart)/60))
+    # p = Pool(12)
+    # tstart = time.time()
+    # _failedToRun = p.map(doOnePair, imgPairs)
+    # print("took %.2f minutes"%((time.time()-tstart)/60))
+
+    compileResults()
 
 
 

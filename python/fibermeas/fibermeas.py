@@ -133,7 +133,11 @@ class BetaImgModel(object):
 
 class MeasureImage(object):
 
-    def __init__(self, litImageFileName, darkImageFileName, outputDir, threshMult = 1):
+    def __init__(
+        self, litImageFileName, darkImageFileName,
+        outputDir, threshMult = 1, handMeas = None
+        ):
+        self.handMeas = handMeas
         # self.basename = litImageFileName.split("_")[1]  #PXXXXX
         junk, filename = os.path.split(litImageFileName)
         self.basename = filename.split("_")[1]
@@ -331,6 +335,25 @@ class MeasureImage(object):
         return filename
 
     def findFibers(self):
+        ### hack for hand measured fibers
+        if self.handMeas is not None:
+            _col = [float(self.handMeas.xAp)-1, float(self.handMeas.xMet)-1, float(self.handMeas.xBoss)-1]
+            _row = [float(self.handMeas.yAp)-1, float(self.handMeas.yMet)-1, float(self.handMeas.yBoss)-1]
+            _dia = [36]*3
+            _ecen = [1]*3
+            _fiberID = ["Apogee", "Metrology", "BOSS"]
+            d = {}
+            d["col"] = _col
+            d["row"] = _row
+            d["dia"] = _dia
+            d["ecen"] = _ecen
+            d["fiberID"] = _fiberID
+
+            self.centroids = pd.DataFrame(d)
+            return
+
+
+
         ################### arbitrary choices ###############
         erosionSize = 4  # pixels
         thresh = 99  # percentile
@@ -476,9 +499,9 @@ class MeasureImage(object):
                 # grad2 = numpy.gradient(meanVal)
 
                 score = 1e9
-                for col in numpy.arange(0, self.leftChamf)[::-1]:
+                for col in numpy.arange(0, self.leftChamf - 25)[::-1]:
                     v = meanVal[col]
-                    if v > score:
+                    if v > score and meanVal[col-1] > v:  # look ahead 2 pixels to make sure we really turned over
                         ii1 = col
                         break
                     score = v
@@ -492,10 +515,17 @@ class MeasureImage(object):
                 # find right most edge of robot, small positive bump
                 # after chamfer edge
                 score = -1e9
-                for col in numpy.arange(self.rightChamf, len(meanVal)):
+                for col in numpy.arange(self.rightChamf + 25, len(meanVal)):
                     v = meanVal[col]
-                    if v < score:
+                    # print("col, v", col, v)
+                    if v < score and meanVal[col+1] < v:
                         ii2 = col
+                        # v = meanVal[col+1]
+                        # print("col, v", col, v)
+                        # v = meanVal[col+2]
+                        # print("col, v", col, v)
+                        # v = meanVal[col+3]
+                        # print("col, v", col, v)
                         break
                     score = v
                     #     valuesDecreasing = True

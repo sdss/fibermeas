@@ -17,17 +17,46 @@ import time
 import warnings
 warnings.filterwarnings("ignore")
 
-baseDir = "/Users/csayres/fibermeas/forConor/Sloan"
-outDir = "/Users/csayres/fibermeas/%s"%datetime.datetime.now().isoformat()
-threshMult = 1
+# normal operation
+# baseDir = "/Users/csayres/fibermeas/forConor/Sloan"
+# outDir = "/Users/csayres/fibermeas/%s"%datetime.datetime.now().isoformat()
+
+# triage
+baseDir = "/Users/csayres/fibermeas/triage"
+outDir = "/Users/csayres/fibermeas/triage"
+handMeasTable = pd.read_csv(baseDir + "/byHandFiberMeas.csv")
+threshMult = 0.25
+
+redo = {}
+# redo["P0730"] = 0.5 # wont work theres a bright spot in the detection zone
+redo["P0889"] = 0.5
+redo["P1010"] = 0.5
+redo["P1262"] = 0.5
+redo["P1287"] = 0.5
+redo["P0040"] = 0.5
+redo["P0626"] = 0.5
+redo["P0689"] = 0.5
+# redo["P0942"] = 0.5  # rotated!
+redo["P1089"] = 0.5
+redo["P0040"] = 0.5
+redo["P0689"] = 0.5
+redo["P0730"] = 0.5
+redo["P1081"] = 0.5
+# the 1000s positioners look edge-shaved?
+
+# start at jul 13
+# newRepos = ["2021Jul13", "2021Jul14", "2021Jul15", "2021Jul17", "2021Jul18"]
+
 
 def findImgPairs(baseDir):
     imgPairs = []
     missingOns = []
     missingOffs = []
-
-    for subdir in glob.glob(baseDir + "/2021*"):
-
+    #subdirs = glob.glob(baseDir + "/2021*")  #)Jul09*") + glob.glob(baseDir + "/2021Jul1*")
+    # subdirs = [baseDir + "/" + x for x in newRepos]
+    subdirs = [baseDir]
+    for subdir in subdirs:  # only run july?
+        # print("subdir")
         allOnFits = glob.glob(subdir + "/FPU_*ON.fits")
         allOffFits = glob.glob(subdir + "/FPU_*OFF.fits")
 
@@ -53,10 +82,12 @@ def findImgPairs(baseDir):
         missingOffs.extend(list(_missingOffs))
 
         for good in list(goods):
+            # print("good", good)
             onFile = glob.glob(subdir + "/FPU_%s*ON.fits"%good)[0]
             offFile = glob.glob(subdir + "/FPU_%s*OFF.fits"%good)[0]
             imgPairs.append([onFile, offFile])
 
+    print("number of img pairs", len(imgPairs), len(missingOns), len(missingOffs))
     return imgPairs, missingOns, missingOffs
 
     # print("goods:", list(goods))
@@ -71,8 +102,19 @@ def findImgPairs(baseDir):
 def doOnePair(x):
     onImg, offImg = x
     failedToRun = False
+
+    ### stuff for injecting hand meas
+    handMeas = None
+    _junk, fname = os.path.split(onImg)
+    posID = fname.split("_")[1]
+    if posID in list(handMeasTable.robotID):
+        handMeas = handMeasTable[handMeasTable.robotID==posID]
     try:
-        mi = MeasureImage(onImg, offImg, outDir, threshMult)
+        mi = MeasureImage(onImg, offImg, outDir, threshMult, handMeas)
+        if mi.basename in redo.keys():
+            mi.threshMult = redo[mi.basename] # modify thresholds
+        # else:
+        #     return None # exit before processing
         mi.plotRaw()
         mi.process()
     except Exception:
@@ -89,9 +131,12 @@ def doOnePair(x):
 if __name__ == '__main__':
 
     imgPairs, missingOns, missingOffs = findImgPairs(baseDir)
+    print("imgPairs")
 
     if not os.path.exists(outDir):
         os.mkdir(outDir)
+
+    # doOnePair(imgPairs[0])
 
     p = Pool(12)
     tstart = time.time()
